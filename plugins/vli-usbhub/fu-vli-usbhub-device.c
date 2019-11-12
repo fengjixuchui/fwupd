@@ -469,7 +469,7 @@ fu_vli_usbhub_device_erase_sector (FuVliUsbhubDevice *self, guint32 addr, GError
 	return TRUE;
 }
 
-static gboolean
+gboolean
 fu_vli_usbhub_device_erase_sectors (FuVliUsbhubDevice *self,
 				    guint32 addr,
 				    gsize sz,
@@ -653,14 +653,17 @@ fu_vli_usbhub_device_guess_kind (FuVliUsbhubDevice *self, GError **error)
 	return TRUE;
 }
 
-static GBytes *
-fu_vli_usbhub_device_dump_firmware (FuVliUsbhubDevice *self, gsize bufsz, GError **error)
+GBytes *
+fu_vli_usbhub_device_dump_firmware (FuVliUsbhubDevice *self,
+				    guint32 address,
+				    gsize bufsz,
+				    GError **error)
 {
 	g_autofree guint8 *buf = g_malloc0 (bufsz);
 	g_autoptr(GPtrArray) chunks = NULL;
 
 	/* get data from hardware */
-	chunks = fu_chunk_array_new (buf, bufsz, 0x0, 0x0, FU_VLI_USBHUB_TXSIZE);
+	chunks = fu_chunk_array_new (buf, bufsz, address, 0x0, FU_VLI_USBHUB_TXSIZE);
 	for (guint i = 0; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks, i);
 		if (!fu_vli_usbhub_device_spi_read_data (self,
@@ -927,7 +930,7 @@ fu_vli_usbhub_device_write_block (FuVliUsbhubDevice *self,
 	return fu_common_bytes_compare_raw (buf, bufsz, buf_tmp, bufsz, error);
 }
 
-static gboolean
+gboolean
 fu_vli_usbhub_device_write_blocks (FuVliUsbhubDevice *self,
 				   guint32 address,
 				   const guint8 *buf,
@@ -1201,7 +1204,9 @@ fu_vli_usbhub_device_read_firmware (FuDevice *device, GError **error)
 	FuVliUsbhubDevice *self = FU_VLI_USBHUB_DEVICE (device);
 	g_autoptr(GBytes) fw = NULL;
 	fu_device_set_status (FU_DEVICE (self), FWUPD_STATUS_DEVICE_VERIFY);
-	fw = fu_vli_usbhub_device_dump_firmware (self, fu_device_get_firmware_size_max (device), error);
+	fw = fu_vli_usbhub_device_dump_firmware (self, 0x0,
+						 fu_device_get_firmware_size_max (device),
+						 error);
 	if (fw == NULL)
 		return NULL;
 	return fu_firmware_new_from_bytes (fw);
