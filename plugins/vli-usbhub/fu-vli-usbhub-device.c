@@ -15,6 +15,8 @@
 #include "fu-vli-usbhub-common.h"
 #include "fu-vli-usbhub-device.h"
 #include "fu-vli-usbhub-firmware.h"
+#include "fu-vli-usbhub-pd-common.h"
+#include "fu-vli-usbhub-pd-device.h"
 
 #define FU_VLI_USBHUB_DEVICE_TIMEOUT		3000	/* ms */
 #define FU_VLI_USBHUB_TXSIZE			0x20	/* bytes */
@@ -695,6 +697,51 @@ fu_vli_usbhub_device_probe (FuDevice *device, GError **error)
 }
 
 static gboolean
+fu_vli_usbhub_device_setup_children (FuVliUsbhubDevice *self, GError **error)
+{
+	FuVliUsbhubPdHdr hdr = { 0x0 };
+	g_autoptr(FuDevice) dev = NULL;
+	g_autoptr(GError) error_local = NULL;
+
+	/* legacy location */
+	if (!fu_vli_usbhub_device_spi_read_data (self,
+						 VLI_USBHUB_FLASHMAP_ADDR_PD_LEGACY +
+						 VLI_USBHUB_PD_FLASHMAP_ADDR_LEGACY,
+						 (guint8 *) &hdr, sizeof(hdr), error)) {
+		g_prefix_error (error, "failed to read legacy PD header");
+		return FALSE;
+	}
+
+	/* new location */
+	if (GUINT16_FROM_LE (hdr.vid) != 0x2109) {
+		g_debug ("PD VID was 0x%04x trying new location",
+			 GUINT16_FROM_LE (hdr.vid));
+		if (!fu_vli_usbhub_device_spi_read_data (self,
+							 VLI_USBHUB_FLASHMAP_ADDR_PD +
+							 VLI_USBHUB_PD_FLASHMAP_ADDR,
+							 (guint8 *) &hdr, sizeof(hdr), error)) {
+			g_prefix_error (error, "failed to read PD header");
+			return FALSE;
+		}
+	}
+
+	/* just empty space */
+	if (hdr.fwver == G_MAXUINT32) {
+		g_debug ("no PD device header found");
+		return TRUE;
+	}
+
+	/* add child */
+	dev = fu_vli_usbhub_pd_device_new (&hdr);
+	if (!fu_device_probe (dev, &error_local)) {
+		g_warning ("cannot create PD device: %s", error_local->message);
+		return TRUE;
+	}
+	fu_device_add_child (FU_DEVICE (self), dev);
+	return TRUE;
+}
+
+static gboolean
 fu_vli_usbhub_device_setup (FuDevice *device, GError **error)
 {
 	FuVliUsbhubDevice *self = FU_VLI_USBHUB_DEVICE (device);
@@ -794,6 +841,10 @@ fu_vli_usbhub_device_setup (FuDevice *device, GError **error)
 			return FALSE;
 		}
 	}
+
+	/* detect the PD child */
+	if (!fu_vli_usbhub_device_setup_children (self, error))
+		return FALSE;
 
 	/* success */
 	return TRUE;
