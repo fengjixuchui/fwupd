@@ -16,7 +16,6 @@
 #include <gio/gunixfdlist.h>
 #include <glib/gi18n.h>
 #include <glib-unix.h>
-#include <gudev/gudev.h>
 #include <json-glib/json-glib.h>
 #include <locale.h>
 #include <stdlib.h>
@@ -2449,7 +2448,7 @@ main (int argc, char *argv[])
 
 	setlocale (LC_ALL, "");
 
-	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
+	bindtextdomain (GETTEXT_PACKAGE, FWUPD_LOCALEDIR);
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 	textdomain (GETTEXT_PACKAGE);
 

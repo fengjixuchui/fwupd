@@ -30,9 +30,12 @@ libfwupdprivate_src = [
   'fu-smbios.c',
   'fu-srec-firmware.c',
   'fu-test.c',
-  'fu-udev-device.c',
   'fu-usb-device.c',
 ]
+
+if get_option('gudev')
+  libfwupdprivate_src += 'fu-udev-device.c'
+endif
 
 if get_option('gpg')
   keyring_src += 'fu-keyring-gpg.c'
@@ -106,9 +109,6 @@ fwupdmgr = executable(
     fwupd,
     libfwupdprivate,
   ],
-  c_args : [
-    '-DFU_OFFLINE_DESTDIR=""',
-  ],
   install : true,
   install_dir : bindir
 )
@@ -163,9 +163,6 @@ fwupdagent = executable(
   link_with : [
     fwupd,
     libfwupdprivate,
-  ],
-  c_args : [
-    '-DFU_OFFLINE_DESTDIR=""',
   ],
   install : true,
   install_dir : join_paths(libexecdir, 'fwupd')
@@ -229,9 +226,6 @@ fwupdtool = executable(
   link_with : [
     fwupd,
     libfwupdprivate,
-  ],
-  c_args : [
-    '-DFU_OFFLINE_DESTDIR=""',
   ],
   install : true,
   install_dir : join_paths(libexecdir, 'fwupd')
@@ -359,7 +353,6 @@ if get_option('tests')
       '-DTESTDATADIR_DST="' + testdatadir_dst + '"',
       '-DTESTDATADIR="' + testdatadir_src + ':' + testdatadir_dst + '"',
       '-DPLUGINBUILDDIR="' + pluginbuilddir + '"',
-      '-DFU_OFFLINE_DESTDIR="/tmp/fwupd-self-test"',
     ],
   )
   test('fu-self-test', e, is_parallel:false, timeout:180)

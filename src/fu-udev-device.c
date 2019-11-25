@@ -10,8 +10,12 @@
 
 #include <fcntl.h>
 #include <string.h>
+#ifdef HAVE_ERRNO_H
 #include <sys/errno.h>
+#endif
+#ifdef HAVE_IOCTL_H
 #include <sys/ioctl.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -80,6 +84,7 @@ fu_udev_device_emit_changed (FuUdevDevice *self)
 static guint32
 fu_udev_device_get_sysfs_attr_as_uint32 (GUdevDevice *udev_device, const gchar *name)
 {
+#ifdef HAVE_GUDEV
 	guint64 tmp = fu_common_strtoull (g_udev_device_get_sysfs_attr (udev_device, name));
 	if (tmp > G_MAXUINT32) {
 		g_warning ("reading %s for %s overflowed",
@@ -88,11 +93,15 @@ fu_udev_device_get_sysfs_attr_as_uint32 (GUdevDevice *udev_device, const gchar *
 		return G_MAXUINT32;
 	}
 	return tmp;
+#else
+	return G_MAXUINT32;
+#endif
 }
 
 static guint8
 fu_udev_device_get_sysfs_attr_as_uint8 (GUdevDevice *udev_device, const gchar *name)
 {
+#ifdef HAVE_GUDEV
 	guint64 tmp = fu_common_strtoull (g_udev_device_get_sysfs_attr (udev_device, name));
 	if (tmp > G_MAXUINT8) {
 		g_warning ("reading %s for %s overflowed",
@@ -101,32 +110,36 @@ fu_udev_device_get_sysfs_attr_as_uint8 (GUdevDevice *udev_device, const gchar *n
 		return G_MAXUINT8;
 	}
 	return tmp;
+#else
+	return G_MAXUINT8;
+#endif
 }
 
 static void
-fu_udev_device_dump_internal (GUdevDevice *udev_device)
+fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 {
+	FuUdevDevice *self = FU_UDEV_DEVICE (device);
+	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	const gchar * const *keys;
 
-	keys = g_udev_device_get_property_keys (udev_device);
-	for (guint i = 0; keys[i] != NULL; i++) {
-		g_debug ("%s={%s}", keys[i],
-			 g_udev_device_get_property (udev_device, keys[i]));
-	}
-	keys = g_udev_device_get_sysfs_attr_keys (udev_device);
-	for (guint i = 0; keys[i] != NULL; i++) {
-		g_debug ("%s=[%s]", keys[i],
-			 g_udev_device_get_sysfs_attr (udev_device, keys[i]));
-	}
-}
-
-void
-fu_udev_device_dump (FuUdevDevice *self)
-{
-	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	if (priv->udev_device == NULL)
 		return;
-	fu_udev_device_dump_internal (priv->udev_device);
+
+	if (g_getenv ("FU_UDEV_DEVICE_DEBUG") == NULL)
+		return;
+
+	keys = g_udev_device_get_property_keys (priv->udev_device);
+	for (guint i = 0; keys[i] != NULL; i++) {
+		fu_common_string_append_kv (str, idt, keys[i],
+					    g_udev_device_get_property (priv->udev_device,
+									keys[i]));
+	}
+	keys = g_udev_device_get_sysfs_attr_keys (priv->udev_device);
+	for (guint i = 0; keys[i] != NULL; i++) {
+		fu_common_string_append_kv (str, idt, keys[i],
+					    g_udev_device_get_sysfs_attr (priv->udev_device,
+									  keys[i]));
+	}
 }
 
 static gboolean
@@ -135,10 +148,12 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 	FuUdevDeviceClass *klass = FU_UDEV_DEVICE_GET_CLASS (device);
 	FuUdevDevice *self = FU_UDEV_DEVICE (device);
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
+#ifdef HAVE_GUDEV
 	const gchar *tmp;
 	g_autofree gchar *subsystem = NULL;
 	g_autoptr(GUdevDevice) udev_parent = NULL;
 	g_autoptr(GUdevDevice) parent_i2c = NULL;
+#endif
 
 	/* nothing to do */
 	if (priv->udev_device == NULL)
@@ -149,6 +164,7 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 	priv->model = fu_udev_device_get_sysfs_attr_as_uint32 (priv->udev_device, "device");
 	priv->revision = fu_udev_device_get_sysfs_attr_as_uint8 (priv->udev_device, "revision");
 
+#ifdef HAVE_GUDEV
 	/* fallback to the parent */
 	udev_parent = g_udev_device_get_parent (priv->udev_device);
 	if (udev_parent != NULL &&
@@ -298,6 +314,7 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 							      "i2c", NULL);
 	if (parent_i2c != NULL)
 		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_INTERNAL);
+#endif
 
 	/* subclassed */
 	if (klass->probe != NULL) {
@@ -320,13 +337,16 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 	g_set_object (&priv->udev_device, udev_device);
 	if (priv->udev_device == NULL)
 		return;
+#ifdef HAVE_GUDEV
 	priv->subsystem = g_strdup (g_udev_device_get_subsystem (priv->udev_device));
 	priv->device_file = g_strdup (g_udev_device_get_device_file (priv->udev_device));
+#endif
 }
 
 guint
 fu_udev_device_get_slot_depth (FuUdevDevice *self, const gchar *subsystem)
 {
+#ifdef HAVE_GUDEV
 	GUdevDevice *udev_device = fu_udev_device_get_dev (FU_UDEV_DEVICE (self));
 	g_autoptr(GUdevDevice) device_tmp = NULL;
 
@@ -339,6 +359,7 @@ fu_udev_device_get_slot_depth (FuUdevDevice *self, const gchar *subsystem)
 			return i;
 		g_set_object (&device_tmp, parent);
 	}
+#endif
 	return 0;
 }
 
@@ -426,11 +447,13 @@ fu_udev_device_get_device_file (FuUdevDevice *self)
 const gchar *
 fu_udev_device_get_sysfs_path (FuUdevDevice *self)
 {
+#ifdef HAVE_GUDEV
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	g_return_val_if_fail (FU_IS_UDEV_DEVICE (self), NULL);
-	if (priv->udev_device == NULL)
-		return NULL;
-	return g_udev_device_get_sysfs_path (priv->udev_device);
+	if (priv->udev_device != NULL)
+		return g_udev_device_get_sysfs_path (priv->udev_device);
+#endif
+	return NULL;
 }
 
 /**
@@ -487,6 +510,7 @@ fu_udev_device_get_revision (FuUdevDevice *self)
 	return priv->revision;
 }
 
+#ifdef HAVE_GUDEV
 static GString *
 fu_udev_device_get_parent_subsystems (FuUdevDevice *self)
 {
@@ -509,6 +533,7 @@ fu_udev_device_get_parent_subsystems (FuUdevDevice *self)
 		g_string_truncate (str, str->len - 1);
 	return str;
 }
+#endif
 
 /**
  * fu_udev_device_set_physical_id:
@@ -527,6 +552,7 @@ fu_udev_device_get_parent_subsystems (FuUdevDevice *self)
 gboolean
 fu_udev_device_set_physical_id (FuUdevDevice *self, const gchar *subsystem, GError **error)
 {
+#ifdef HAVE_GUDEV
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	const gchar *tmp;
 	g_autofree gchar *physical_id = NULL;
@@ -600,6 +626,13 @@ fu_udev_device_set_physical_id (FuUdevDevice *self, const gchar *subsystem, GErr
 	/* success */
 	fu_device_set_physical_id (FU_DEVICE (self), physical_id);
 	return TRUE;
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "Not supported as <gudev.h> is unavailable");
+	return FALSE;
+#endif
 }
 
 /**
@@ -735,6 +768,7 @@ fu_udev_device_ioctl (FuUdevDevice *self,
 		      gint *rc,
 		      GError **error)
 {
+#ifdef HAVE_IOCTL_H
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	gint rc_tmp;
 
@@ -762,6 +796,13 @@ fu_udev_device_ioctl (FuUdevDevice *self,
 		return FALSE;
 	}
 	return TRUE;
+#else
+	g_set_error (error,
+		     FWUPD_ERROR,
+		     FWUPD_ERROR_NOT_SUPPORTED,
+		     "Not supported as <sys/ioctl.h> not found");
+	return FALSE;
+#endif
 }
 
 /**
@@ -786,6 +827,7 @@ fu_udev_device_pwrite (FuUdevDevice *self, goffset port, guint8 data, GError **e
 	g_return_val_if_fail (port != 0x0, FALSE);
 	g_return_val_if_fail (priv->fd > 0, FALSE);
 
+#ifdef HAVE_PWRITE
 	if (pwrite (priv->fd, &data, 1, port) != 1) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -796,6 +838,13 @@ fu_udev_device_pwrite (FuUdevDevice *self, goffset port, guint8 data, GError **e
 		return FALSE;
 	}
 	return TRUE;
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "Not supported as pwrite() is unavailable");
+	return FALSE;
+#endif
 }
 
 /**
@@ -821,6 +870,7 @@ fu_udev_device_pread (FuUdevDevice *self, goffset port, guint8 *data, GError **e
 	g_return_val_if_fail (data != NULL, FALSE);
 	g_return_val_if_fail (priv->fd > 0, FALSE);
 
+#ifdef HAVE_PWRITE
 	if (pread (priv->fd, data, 1, port) != 1) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -831,6 +881,13 @@ fu_udev_device_pread (FuUdevDevice *self, goffset port, guint8 *data, GError **e
 		return FALSE;
 	}
 	return TRUE;
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "Not supported as pread() is unavailable");
+	return FALSE;
+#endif
 }
 
 static void
@@ -912,6 +969,7 @@ fu_udev_device_class_init (FuUdevDeviceClass *klass)
 	device_class->incorporate = fu_udev_device_incorporate;
 	device_class->open = fu_udev_device_open;
 	device_class->close = fu_udev_device_close;
+	device_class->to_string = fu_udev_device_to_string;
 
 	signals[SIGNAL_CHANGED] =
 		g_signal_new ("changed",

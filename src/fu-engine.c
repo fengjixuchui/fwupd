@@ -11,10 +11,14 @@
 #include <gio/gio.h>
 #include <gio/gunixinputstream.h>
 #include <glib-object.h>
+#ifdef HAVE_GUDEV
 #include <gudev/gudev.h>
+#endif
 #include <fnmatch.h>
 #include <string.h>
+#ifdef HAVE_UTSNAME_H
 #include <sys/utsname.h>
+#endif
 
 #include "fwupd-common-private.h"
 #include "fwupd-enums-private.h"
@@ -59,7 +63,9 @@ struct _FuEngine
 	GObject			 parent_instance;
 	FuAppFlags		 app_flags;
 	GUsbContext		*usb_ctx;
+#ifdef HAVE_GUDEV
 	GUdevClient		*gudev_client;
+#endif
 	FuConfig		*config;
 	FuDeviceList		*device_list;
 	FwupdStatus		 status;
@@ -74,7 +80,9 @@ struct _FuEngine
 	FuPluginList		*plugin_list;
 	GPtrArray		*plugin_filter;
 	GPtrArray		*udev_subsystems;
+#ifdef HAVE_GUDEV
 	GHashTable		*udev_changed_ids;	/* sysfs:FuEngineUdevChangedHelper */
+#endif
 	FuSmbios		*smbios;
 	FuHwids			*hwids;
 	FuQuirks		*quirks;
@@ -1380,7 +1388,9 @@ fu_engine_get_report_metadata (FuEngine *self)
 {
 	GHashTable *hash;
 	gchar *btime;
+#ifdef HAVE_UTSNAME_H
 	struct utsname name_tmp;
+#endif
 	g_autoptr(GList) compile_keys = g_hash_table_get_keys (self->compile_versions);
 	g_autoptr(GList) runtime_keys = g_hash_table_get_keys (self->runtime_versions);
 
@@ -1402,12 +1412,14 @@ fu_engine_get_report_metadata (FuEngine *self)
 	}
 
 	/* kernel version is often important for debugging failures */
+#ifdef HAVE_UTSNAME_H
 	memset (&name_tmp, 0, sizeof (struct utsname));
 	if (uname (&name_tmp) >= 0) {
 		g_hash_table_insert (hash,
 				     g_strdup ("CpuArchitecture"),
 				     g_strdup (name_tmp.machine));
 	}
+#endif
 
 	/* add the kernel boot time so we can detect a reboot */
 	btime = fu_engine_get_boot_time ();
@@ -4074,6 +4086,7 @@ fu_engine_recoldplug_delay_cb (gpointer user_data)
 	return FALSE;
 }
 
+#ifdef HAVE_GUDEV
 static void
 fu_engine_udev_device_add (FuEngine *self, GUdevDevice *udev_device)
 {
@@ -4245,6 +4258,7 @@ fu_engine_enumerate_udev (FuEngine *self)
 		g_list_free (devices);
 	}
 }
+#endif
 
 static void
 fu_engine_plugin_recoldplug_cb (FuPlugin *plugin, FuEngine *self)
@@ -4256,7 +4270,9 @@ fu_engine_plugin_recoldplug_cb (FuPlugin *plugin, FuEngine *self)
 	if (self->app_flags & FU_APP_FLAGS_NO_IDLE_SOURCES) {
 		g_debug ("doing direct recoldplug");
 		fu_engine_plugins_coldplug (self, TRUE);
+#ifdef HAVE_GUDEV
 		fu_engine_enumerate_udev (self);
+#endif
 		return;
 	}
 	g_debug ("scheduling a recoldplug");
@@ -4277,16 +4293,20 @@ fu_engine_plugin_set_coldplug_delay_cb (FuPlugin *plugin, guint duration, FuEngi
 void
 fu_engine_add_plugin (FuEngine *self, FuPlugin *plugin)
 {
-	/* plugin does not match built version */
-	if (fu_plugin_get_build_hash (plugin) == NULL) {
-		const gchar *name = fu_plugin_get_name (plugin);
-		g_warning ("%s should call fu_plugin_set_build_hash()", name);
-		self->tainted = TRUE;
-	} else if (g_strcmp0 (fu_plugin_get_build_hash (plugin), FU_BUILD_HASH) != 0) {
-		const gchar *name = fu_plugin_get_name (plugin);
-		g_warning ("%s has incorrect built version %s",
-				name, fu_plugin_get_build_hash (plugin));
-		self->tainted = TRUE;
+	if (fu_plugin_is_open (plugin)) {
+		/* plugin does not match built version */
+		if (fu_plugin_get_build_hash (plugin) == NULL) {
+			const gchar *name = fu_plugin_get_name (plugin);
+			g_warning ("%s should call fu_plugin_set_build_hash()",
+				   name);
+			self->tainted = TRUE;
+		} else if (g_strcmp0 (fu_plugin_get_build_hash (plugin),
+				      FU_BUILD_HASH) != 0) {
+			const gchar *name = fu_plugin_get_name (plugin);
+			g_warning ("%s has incorrect built version %s",
+				   name, fu_plugin_get_build_hash (plugin));
+			self->tainted = TRUE;
+		}
 	}
 
 	fu_plugin_list_add (self->plugin_list, plugin);
@@ -4363,6 +4383,7 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 	const gchar *fn;
 	g_autoptr(GDir) dir = NULL;
 	g_autofree gchar *plugin_path = NULL;
+	g_autofree gchar *suffix = g_strdup_printf (".%s", G_MODULE_SUFFIX);
 
 	/* search */
 	plugin_path = fu_common_get_path (FU_PATH_KIND_PLUGINDIR_PKG);
@@ -4376,7 +4397,7 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 		g_autoptr(GError) error_local = NULL;
 
 		/* ignore non-plugins */
-		if (!g_str_has_suffix (fn, ".so"))
+		if (!g_str_has_suffix (fn, suffix))
 			continue;
 
 		/* is blacklisted */
@@ -4677,6 +4698,7 @@ fu_engine_update_history_database (FuEngine *self, GError **error)
 	return TRUE;
 }
 
+#ifdef HAVE_GUDEV
 static void
 fu_engine_udev_uevent_cb (GUdevClient *gudev_client,
 			  const gchar *action,
@@ -4696,6 +4718,7 @@ fu_engine_udev_uevent_cb (GUdevClient *gudev_client,
 		return;
 	}
 }
+#endif
 
 static void
 fu_engine_ensure_client_certificate (FuEngine *self)
@@ -4833,6 +4856,7 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 			  G_CALLBACK (fu_engine_device_changed_cb),
 			  self);
 
+#ifdef HAVE_GUDEV
 	/* udev watches can only be set up in _init() so set up client now */
 	if (self->udev_subsystems->len > 0) {
 		g_auto(GStrv) udev_subsystems = g_new0 (gchar *, self->udev_subsystems->len + 1);
@@ -4844,6 +4868,7 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 		g_signal_connect (self->gudev_client, "uevent",
 				  G_CALLBACK (fu_engine_udev_uevent_cb), self);
 	}
+#endif
 
 	fu_engine_set_status (self, FWUPD_STATUS_LOADING);
 
@@ -4862,9 +4887,11 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	if ((flags & FU_ENGINE_LOAD_FLAG_NO_ENUMERATE) == 0)
 		g_usb_context_enumerate (self->usb_ctx);
 
+#ifdef HAVE_GUDEV
 	/* coldplug udev devices */
 	if ((flags & FU_ENGINE_LOAD_FLAG_NO_ENUMERATE) == 0)
 		fu_engine_enumerate_udev (self);
+#endif
 
 	/* update the db for devices that were updated during the reboot */
 	if (!fu_engine_update_history_database (self, error))
@@ -4943,7 +4970,9 @@ fu_engine_idle_status_notify_cb (FuIdle *idle, GParamSpec *pspec, FuEngine *self
 static void
 fu_engine_init (FuEngine *self)
 {
+#ifdef HAVE_UTSNAME_H
 	struct utsname uname_tmp;
+#endif
 	self->percentage = 0;
 	self->status = FWUPD_STATUS_IDLE;
 	self->config = fu_config_new ();
@@ -4956,8 +4985,10 @@ fu_engine_init (FuEngine *self)
 	self->plugin_list = fu_plugin_list_new ();
 	self->plugin_filter = g_ptr_array_new_with_free_func (g_free);
 	self->udev_subsystems = g_ptr_array_new_with_free_func (g_free);
+#ifdef HAVE_GUDEV
 	self->udev_changed_ids = g_hash_table_new_full (g_str_hash, g_str_equal,
 							g_free, (GDestroyNotify) fu_engine_udev_changed_helper_free);
+#endif
 	self->runtime_versions = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 	self->compile_versions = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 	self->approved_firmware = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
@@ -4979,9 +5010,11 @@ fu_engine_init (FuEngine *self)
 #endif
 
 	/* optional kernel version */
+#ifdef HAVE_UTSNAME_H
 	memset (&uname_tmp, 0, sizeof(uname_tmp));
 	if (uname (&uname_tmp) >= 0)
 		fu_engine_add_runtime_version (self, "org.kernel", uname_tmp.release);
+#endif
 
 	g_hash_table_insert (self->compile_versions,
 			     g_strdup ("com.redhat.fwupdate"),
@@ -5007,8 +5040,10 @@ fu_engine_finalize (GObject *obj)
 		g_object_unref (self->usb_ctx);
 	if (self->silo != NULL)
 		g_object_unref (self->silo);
+#ifdef HAVE_GUDEV
 	if (self->gudev_client != NULL)
 		g_object_unref (self->gudev_client);
+#endif
 	if (self->coldplug_id != 0)
 		g_source_remove (self->coldplug_id);
 
@@ -5022,7 +5057,9 @@ fu_engine_finalize (GObject *obj)
 	g_object_unref (self->device_list);
 	g_ptr_array_unref (self->plugin_filter);
 	g_ptr_array_unref (self->udev_subsystems);
+#ifdef HAVE_GUDEV
 	g_hash_table_unref (self->udev_changed_ids);
+#endif
 	g_hash_table_unref (self->runtime_versions);
 	g_hash_table_unref (self->compile_versions);
 	g_hash_table_unref (self->approved_firmware);

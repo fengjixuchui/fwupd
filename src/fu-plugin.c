@@ -13,7 +13,6 @@
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
-#include <gio/gunixinputstream.h>
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
 #endif /* HAVE_VALGRIND */
@@ -108,6 +107,23 @@ typedef gboolean	 (*FuPluginUdevDeviceAddedFunc)	(FuPlugin	*self,
 							 GError		**error);
 
 /**
+ * fu_plugin_is_open:
+ * @self: A #FuPlugin
+ *
+ * Determines if the plugin is opened
+ *
+ * Returns: TRUE for opened, FALSE for not
+ *
+ * Since: 1.3.5
+ **/
+gboolean
+fu_plugin_is_open (FuPlugin *self)
+{
+	FuPluginPrivate *priv = GET_PRIVATE (self);
+	return priv->module != NULL;
+}
+
+/**
  * fu_plugin_get_name:
  * @self: A #FuPlugin
  *
@@ -199,7 +215,7 @@ void
 fu_plugin_cache_add (FuPlugin *self, const gchar *id, gpointer dev)
 {
 	FuPluginPrivate *priv = GET_PRIVATE (self);
-	g_autoptr(GRWLockReaderLocker) locker = g_rw_lock_writer_locker_new (&priv->devices_mutex);
+	g_autoptr(GRWLockWriterLocker) locker = g_rw_lock_writer_locker_new (&priv->devices_mutex);
 	g_return_if_fail (FU_IS_PLUGIN (self));
 	g_return_if_fail (id != NULL);
 	g_return_if_fail (locker != NULL);
@@ -219,7 +235,7 @@ void
 fu_plugin_cache_remove (FuPlugin *self, const gchar *id)
 {
 	FuPluginPrivate *priv = GET_PRIVATE (self);
-	g_autoptr(GRWLockReaderLocker) locker = g_rw_lock_writer_locker_new (&priv->devices_mutex);
+	g_autoptr(GRWLockWriterLocker) locker = g_rw_lock_writer_locker_new (&priv->devices_mutex);
 	g_return_if_fail (FU_IS_PLUGIN (self));
 	g_return_if_fail (id != NULL);
 	g_return_if_fail (locker != NULL);
@@ -995,12 +1011,13 @@ fu_plugin_runner_startup (FuPlugin *self, GError **error)
 static gboolean
 fu_plugin_runner_offline_invalidate (GError **error)
 {
+	g_autofree gchar *trigger = fu_common_get_path (FU_PATH_KIND_OFFLINE_TRIGGER);
 	g_autoptr(GError) error_local = NULL;
 	g_autoptr(GFile) file1 = NULL;
 
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-	file1 = g_file_new_for_path (FU_OFFLINE_TRIGGER_FILENAME);
+	file1 = g_file_new_for_path (trigger);
 	if (!g_file_query_exists (file1, NULL))
 		return TRUE;
 	if (!g_file_delete (file1, NULL, &error_local)) {
@@ -1008,7 +1025,7 @@ fu_plugin_runner_offline_invalidate (GError **error)
 			     FWUPD_ERROR,
 			     FWUPD_ERROR_INTERNAL,
 			     "Cannot delete %s: %s",
-			     FU_OFFLINE_TRIGGER_FILENAME,
+			     trigger,
 			     error_local->message);
 		return FALSE;
 	}
@@ -1021,25 +1038,26 @@ fu_plugin_runner_offline_setup (GError **error)
 	gint rc;
 	g_autofree gchar *filename = NULL;
 	g_autofree gchar *symlink_target = fu_common_get_path (FU_PATH_KIND_LOCALSTATEDIR_PKG);
+	g_autofree gchar *trigger = fu_common_get_path (FU_PATH_KIND_OFFLINE_TRIGGER);
 
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* does already exist */
-	filename = fu_common_realpath (FU_OFFLINE_TRIGGER_FILENAME, NULL);
+	filename = fu_common_realpath (trigger, NULL);
 	if (g_strcmp0 (filename, symlink_target) == 0) {
 		g_debug ("%s already points to %s, skipping creation",
-			 FU_OFFLINE_TRIGGER_FILENAME, symlink_target);
+			 trigger, symlink_target);
 		return TRUE;
 	}
 
 	/* create symlink for the systemd-system-update-generator */
-	rc = symlink (symlink_target, FU_OFFLINE_TRIGGER_FILENAME);
+	rc = symlink (symlink_target, trigger);
 	if (rc < 0) {
 		g_set_error (error,
 			     FWUPD_ERROR,
 			     FWUPD_ERROR_INTERNAL,
 			     "Failed to create symlink %s to %s: %s",
-			     FU_OFFLINE_TRIGGER_FILENAME,
+			     trigger,
 			     "/var/lib", strerror (errno));
 		return FALSE;
 	}
@@ -1954,7 +1972,7 @@ fu_plugin_runner_update (FuPlugin *self,
 		/* delete cab file */
 		release = fu_device_get_release_default (device_pending);
 		tmp = fwupd_release_get_filename (release);
-		if (tmp != NULL && g_str_has_prefix (tmp, LIBEXECDIR)) {
+		if (tmp != NULL && g_str_has_prefix (tmp, FWUPD_LIBEXECDIR)) {
 			g_autoptr(GError) error_delete = NULL;
 			g_autoptr(GFile) file = NULL;
 			file = g_file_new_for_path (tmp);

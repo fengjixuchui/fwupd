@@ -47,7 +47,6 @@ lt_version = '@0@.@1@.@2@'.format(lt_current, lt_age, lt_revision)
 
 # get supported warning flags
 warning_flags = [
-  '-fstack-protector-strong',
   '-Waggregate-return',
   '-Wunused',
   '-Warray-bounds',
@@ -103,6 +102,10 @@ warning_flags = [
 ]
 cc = meson.get_compiler('c')
 add_project_arguments(cc.get_supported_arguments(warning_flags), language : 'c')
+
+if not meson.is_cross_build()
+  add_project_arguments('-fstack-protector-strong', language : 'c')
+endif
 
 # enable full RELRO where possible
 # FIXME: until https://github.com/mesonbuild/meson/issues/1140 is fixed
@@ -162,9 +165,14 @@ if gio.version().version_compare ('>= 2.55.0')
 endif
 if build_standalone
 gmodule = dependency('gmodule-2.0')
-gudev = dependency('gudev-1.0', version : '>= 232')
+if get_option('gudev')
+  gudev = dependency('gudev-1.0', version : '>= 232')
+  conf.set('HAVE_GUDEV', '1')
+else
+  gudev = dependency('', required : false)
+endif
 libxmlb = dependency('xmlb', version : '>= 0.1.13', fallback : ['libxmlb', 'libxmlb_dep'])
-gusb = dependency('gusb', version : '>= 0.2.9')
+gusb = dependency('gusb', version : '>= 0.2.9', fallback : ['gusb', 'gusb_dep'])
 sqlite = dependency('sqlite3')
 libarchive = dependency('libarchive')
 endif
@@ -217,6 +225,31 @@ endif
 
 if build_standalone and get_option('plugin_altos')
   libelf = dependency('libelf')
+endif
+
+if cc.has_header('sys/utsname.h')
+  conf.set('HAVE_UTSNAME_H', '1')
+endif
+if cc.has_header('sys/ioctl.h')
+  conf.set('HAVE_IOCTL_H', '1')
+endif
+if cc.has_header('sys/errno.h')
+  conf.set('HAVE_ERRNO_H', '1')
+endif
+if cc.has_header('poll.h')
+  conf.set('HAVE_POLL_H', '1')
+endif
+if cc.has_function('getuid')
+  conf.set('HAVE_GETUID', '1')
+endif
+if cc.has_function('realpath')
+  conf.set('HAVE_REALPATH', '1')
+endif
+if cc.has_header_symbol('locale.h', 'LC_MESSAGES')
+  conf.set('HAVE_LC_MESSAGES', '1')
+endif
+if cc.has_function('pwrite', args : '-D_XOPEN_SOURCE')
+  conf.set('HAVE_PWRITE', '1')
 endif
 
 if build_standalone and get_option('plugin_uefi')
@@ -316,21 +349,21 @@ endif
 gnome = import('gnome')
 i18n = import('i18n')
 
-conf.set_quoted('BINDIR', bindir)
-conf.set_quoted('LIBEXECDIR', libexecdir)
-conf.set_quoted('DATADIR', datadir)
-conf.set_quoted('LOCALSTATEDIR', localstatedir)
-conf.set_quoted('SYSCONFDIR', sysconfdir)
+conf.set_quoted('FWUPD_BINDIR', bindir)
+conf.set_quoted('FWUPD_LIBEXECDIR', libexecdir)
+conf.set_quoted('FWUPD_DATADIR', datadir)
+conf.set_quoted('FWUPD_LOCALSTATEDIR', localstatedir)
+conf.set_quoted('FWUPD_SYSCONFDIR', sysconfdir)
+conf.set_quoted('FWUPD_LOCALEDIR', localedir)
 
 if build_standalone
 plugin_dir = join_paths(libdir, 'fwupd-plugins-3')
-conf.set_quoted('PLUGINDIR', plugin_dir)
+conf.set_quoted('FWUPD_PLUGINDIR', plugin_dir)
 endif
 
 conf.set_quoted('GETTEXT_PACKAGE', meson.project_name())
 conf.set_quoted('PACKAGE_NAME', meson.project_name())
 conf.set_quoted('VERSION', meson.project_version())
-conf.set_quoted('LOCALEDIR', localedir)
 configure_file(
   output : 'config.h',
   configuration : conf

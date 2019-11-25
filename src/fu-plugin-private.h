@@ -10,9 +10,8 @@
 #include "fu-plugin.h"
 #include "fu-smbios.h"
 
-#define FU_OFFLINE_TRIGGER_FILENAME	FU_OFFLINE_DESTDIR "/system-update"
-
 FuPlugin	*fu_plugin_new				(void);
+gboolean	 fu_plugin_is_open			(FuPlugin	*self);
 void		 fu_plugin_set_usb_context		(FuPlugin	*self,
 							 GUsbContext	*usb_ctx);
 void		 fu_plugin_set_hwids			(FuPlugin	*self,
