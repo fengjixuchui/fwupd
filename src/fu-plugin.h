@@ -71,7 +71,6 @@ typedef enum {
  * @FU_PLUGIN_RULE_RUN_BEFORE:		Order the plugin before another
  * @FU_PLUGIN_RULE_BETTER_THAN:		Is better than another plugin
  * @FU_PLUGIN_RULE_INHIBITS_IDLE:	The plugin inhibits the idle shutdown
- * @FU_PLUGIN_RULE_SUPPORTS_PROTOCOL:	The plugin supports a well known protocol
  *
  * The rules used for ordering plugins.
  * Plugins are expected to add rules in fu_plugin_initialize().
@@ -82,7 +81,6 @@ typedef enum {
 	FU_PLUGIN_RULE_RUN_BEFORE,
 	FU_PLUGIN_RULE_BETTER_THAN,
 	FU_PLUGIN_RULE_INHIBITS_IDLE,
-	FU_PLUGIN_RULE_SUPPORTS_PROTOCOL,
 	/*< private >*/
 	FU_PLUGIN_RULE_LAST
 } FuPluginRule;
@@ -111,7 +109,7 @@ void		 fu_plugin_set_coldplug_delay		(FuPlugin	*self,
 							 guint		 duration);
 void		 fu_plugin_set_device_gtype		(FuPlugin	*self,
 							 GType		 device_gtype);
-void		 fu_plugin_add_firmware_gtype		(FuPlugin	*plugin,
+void		 fu_plugin_add_firmware_gtype		(FuPlugin	*self,
 							 const gchar	*id,
 							 GType		 gtype);
 gpointer	 fu_plugin_cache_lookup			(FuPlugin	*self,

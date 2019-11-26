@@ -36,6 +36,7 @@ typedef struct {
 	gchar				*equivalent_id;
 	gchar				*physical_id;
 	gchar				*logical_id;
+	gchar				*protocol;
 	FuDevice			*alternate;
 	FuDevice			*parent;	/* noref */
 	FuQuirks			*quirks;
@@ -65,7 +66,9 @@ enum {
 	PROP_PROGRESS,
 	PROP_PHYSICAL_ID,
 	PROP_LOGICAL_ID,
+	PROP_PROTOCOL,
 	PROP_QUIRKS,
+	PROP_PARENT,
 	PROP_LAST
 };
 
@@ -91,8 +94,14 @@ fu_device_get_property (GObject *object, guint prop_id,
 	case PROP_LOGICAL_ID:
 		g_value_set_string (value, priv->logical_id);
 		break;
+	case PROP_PROTOCOL:
+		g_value_set_string (value, priv->protocol);
+		break;
 	case PROP_QUIRKS:
 		g_value_set_object (value, priv->quirks);
+		break;
+	case PROP_PARENT:
+		g_value_set_object (value, priv->parent);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -105,6 +114,7 @@ fu_device_set_property (GObject *object, guint prop_id,
 			const GValue *value, GParamSpec *pspec)
 {
 	FuDevice *self = FU_DEVICE (object);
+	FuDevicePrivate *priv = GET_PRIVATE (self);
 	switch (prop_id) {
 	case PROP_STATUS:
 		fu_device_set_status (self, g_value_get_uint (value));
@@ -118,8 +128,15 @@ fu_device_set_property (GObject *object, guint prop_id,
 	case PROP_LOGICAL_ID:
 		fu_device_set_logical_id (self, g_value_get_string (value));
 		break;
+	case PROP_PROTOCOL:
+		fu_device_set_protocol (self, g_value_get_string (value));
+		break;
 	case PROP_QUIRKS:
 		fu_device_set_quirks (self, g_value_get_object (value));
+		break;
+	case PROP_PARENT:
+		/* noref */
+		priv->parent = g_value_get_object (value);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -307,6 +324,16 @@ fu_device_set_priority (FuDevice *self, guint priority)
 	priv->priority = priority;
 }
 
+/**
+ * fu_device_get_equivalent_id:
+ * @self: A #FuDevice
+ *
+ * Gets any equivalent ID for a device
+ *
+ * Returns: (transfer none): a #gchar or NULL
+ *
+ * Since: 0.6.1
+ **/
 const gchar *
 fu_device_get_equivalent_id (FuDevice *self)
 {
@@ -315,6 +342,15 @@ fu_device_get_equivalent_id (FuDevice *self)
 	return priv->equivalent_id;
 }
 
+/**
+ * fu_device_set_equivalent_id:
+ * @self: A #FuDevice
+ * @equivalent_id: A string
+ *
+ * Sets any equivalent ID for a device
+ *
+ * Since: 0.6.1
+ **/
 void
 fu_device_set_equivalent_id (FuDevice *self, const gchar *equivalent_id)
 {
@@ -325,7 +361,7 @@ fu_device_set_equivalent_id (FuDevice *self, const gchar *equivalent_id)
 }
 
 /**
- * fu_device_get_alternate:
+ * fu_device_get_alternate_id:
  * @self: A #FuDevice
  *
  * Gets any alternate device ID. An alternate device may be linked to the primary
@@ -344,9 +380,9 @@ fu_device_get_alternate_id (FuDevice *self)
 }
 
 /**
- * fu_device_set_alternate:
+ * fu_device_set_alternate_id:
  * @self: A #FuDevice
- * @alternate: Another #FuDevice
+ * @alternate_id: Another #FuDevice
  *
  * Sets any alternate device ID. An alternate device may be linked to the primary
  * device in some way.
@@ -430,6 +466,19 @@ fu_device_get_parent (FuDevice *self)
 	return priv->parent;
 }
 
+/**
+ * fu_device_set_parent:
+ * @self: A #FuDevice
+ * @parent: A #FuDevice
+ *
+ * Sets any parent device. An parent device is logically "above" the current
+ * device and this may be reflected in client tools.
+ *
+ * This information also allows the plugin to optionally verify the parent
+ * device, for instance checking the parent device firmware version.
+ *
+ * Since: 1.0.8
+ **/
 void
 fu_device_set_parent (FuDevice *self, FuDevice *parent)
 {
@@ -778,6 +827,16 @@ fu_device_set_quirk_kv (FuDevice *self,
 	return FALSE;
 }
 
+/**
+ * fu_device_get_specialized_gtype:
+ * @self: A #FuDevice
+ *
+ * Gets the specialized type of the device
+ *
+ * Returns:#GType
+ *
+ * Since: 1.3.3
+ **/
 GType
 fu_device_get_specialized_gtype (FuDevice *self)
 {
@@ -931,7 +990,17 @@ fu_device_has_guid (FuDevice *self, const gchar *guid)
 	return fwupd_device_has_guid (FWUPD_DEVICE (self), guid);
 }
 
-/* private */
+/**
+ * fu_device_add_instance_id_full:
+ * @self: A #FuDevice
+ * @instance_id: A Instance ID, e.g. `WacomAES`
+ * @flags: A #FuDeviceInstanceFlags
+ *
+ * Adds an instance ID with all paramters set
+ *
+ *
+ * Since: 1.2.9
+ **/
 void
 fu_device_add_instance_id_full (FuDevice *self,
 				const gchar *instance_id,
@@ -1412,6 +1481,42 @@ fu_device_set_logical_id (FuDevice *self, const gchar *logical_id)
 }
 
 /**
+ * fu_device_get_protocol:
+ * @self: A #FuDevice
+ *
+ * Gets the protocol ID on the device.
+ *
+ * Returns: a string value e.g. `org.hughski.colorhug`, or %NULL
+ *
+ * Since: 1.3.5
+ **/
+const gchar *
+fu_device_get_protocol (FuDevice *self)
+{
+	FuDevicePrivate *priv = GET_PRIVATE (self);
+	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
+	return priv->protocol;
+}
+
+/**
+ * fu_device_set_protocol:
+ * @self: A #FuDevice
+ * @protocol: a defined protocol ID, e.g. `org.hughski.colorhug`
+ *
+ * Sets the protocol ID on the device.
+ *
+ * Since: 1.3.5
+ **/
+void
+fu_device_set_protocol (FuDevice *self, const gchar *protocol)
+{
+	FuDevicePrivate *priv = GET_PRIVATE (self);
+	g_return_if_fail (FU_IS_DEVICE (self));
+	g_free (priv->protocol);
+	priv->protocol = g_strdup (protocol);
+}
+
+/**
  * fu_device_set_physical_id:
  * @self: A #FuDevice
  * @physical_id: a string that identifies the physical device connection
@@ -1457,6 +1562,16 @@ fu_device_get_physical_id (FuDevice *self)
 	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
 	return priv->physical_id;
 }
+
+/**
+ * fu_device_add_flag:
+ * @self: A #FuDevice
+ * @flag: A #FwupdDeviceFlags
+ *
+ * Adds a device flag to the device
+ *
+ * Since: 0.1.0
+ **/
 
 void
 fu_device_add_flag (FuDevice *self, FwupdDeviceFlags flag)
@@ -1729,6 +1844,8 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 		fu_common_string_append_kv (str, idt + 1, "PhysicalId", priv->physical_id);
 	if (priv->logical_id != NULL)
 		fu_common_string_append_kv (str, idt + 1, "LogicalId", priv->logical_id);
+	if (priv->protocol != NULL)
+		fu_common_string_append_kv (str, idt + 1, "Protocol", priv->protocol);
 	if (priv->size_min > 0) {
 		g_autofree gchar *sz = g_strdup_printf ("%" G_GUINT64_FORMAT, priv->size_min);
 		fu_common_string_append_kv (str, idt + 1, "FirmwareSizeMin", sz);
@@ -2071,6 +2188,7 @@ fu_device_reload (FuDevice *self, GError **error)
 /**
  * fu_device_prepare:
  * @self: A #FuDevice
+ * @flags: A #FwupdInstallFlags
  * @error: A #GError
  *
  * Prepares a device for update. A different plugin can handle each of
@@ -2099,6 +2217,7 @@ fu_device_prepare (FuDevice *self, FwupdInstallFlags flags, GError **error)
 /**
  * fu_device_cleanup:
  * @self: A #FuDevice
+ * @flags: A #FwupdInstallFlags
  * @error: A #GError
  *
  * Cleans up a device after an update. A different plugin can handle each of
@@ -2412,8 +2531,6 @@ fu_device_activate (FuDevice *self, GError **error)
  * This should be done in case the backing device has changed, for instance if
  * a USB device has been replugged.
  *
- * Returns: %TRUE for success
- *
  * Since: 1.1.2
  **/
 void
@@ -2456,6 +2573,8 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 		fu_device_set_physical_id (self, priv_donor->physical_id);
 	if (priv->logical_id == NULL && priv_donor->logical_id != NULL)
 		fu_device_set_logical_id (self, priv_donor->logical_id);
+	if (priv->protocol == NULL && priv_donor->protocol != NULL)
+		fu_device_set_protocol (self, priv_donor->protocol);
 	if (priv->quirks == NULL)
 		fu_device_set_quirks (self, fu_device_get_quirks (donor));
 	g_rw_lock_reader_lock (&priv_donor->parent_guids_mutex);
@@ -2535,6 +2654,11 @@ fu_device_class_init (FuDeviceClass *klass)
 				     G_PARAM_STATIC_NAME);
 	g_object_class_install_property (object_class, PROP_LOGICAL_ID, pspec);
 
+	pspec = g_param_spec_string ("protocol", NULL, NULL, NULL,
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_NAME);
+	g_object_class_install_property (object_class, PROP_PROTOCOL, pspec);
+
 	pspec = g_param_spec_uint ("progress", NULL, NULL,
 				   0, 100, 0,
 				   G_PARAM_READWRITE |
@@ -2546,6 +2670,13 @@ fu_device_class_init (FuDeviceClass *klass)
 				     G_PARAM_READWRITE |
 				     G_PARAM_STATIC_NAME);
 	g_object_class_install_property (object_class, PROP_QUIRKS, pspec);
+
+	pspec = g_param_spec_object ("parent", NULL, NULL,
+				     FU_TYPE_DEVICE,
+				     G_PARAM_READWRITE |
+				     G_PARAM_CONSTRUCT |
+				     G_PARAM_STATIC_NAME);
+	g_object_class_install_property (object_class, PROP_PARENT, pspec);
 }
 
 static void
@@ -2586,10 +2717,18 @@ fu_device_finalize (GObject *object)
 	g_free (priv->equivalent_id);
 	g_free (priv->physical_id);
 	g_free (priv->logical_id);
+	g_free (priv->protocol);
 
 	G_OBJECT_CLASS (fu_device_parent_class)->finalize (object);
 }
 
+/**
+ * fu_device_new:
+ *
+ * Creates a new #Fudevice
+ *
+ * Since: 0.1.0
+ **/
 FuDevice *
 fu_device_new (void)
 {

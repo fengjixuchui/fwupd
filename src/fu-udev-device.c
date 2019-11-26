@@ -118,6 +118,7 @@ fu_udev_device_get_sysfs_attr_as_uint8 (GUdevDevice *udev_device, const gchar *n
 static void
 fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 {
+#ifdef HAVE_GUDEV
 	FuUdevDevice *self = FU_UDEV_DEVICE (device);
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 	const gchar * const *keys;
@@ -140,6 +141,7 @@ fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 					    g_udev_device_get_sysfs_attr (priv->udev_device,
 									  keys[i]));
 	}
+#endif
 }
 
 static gboolean
@@ -283,7 +285,7 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 	}
 
 	/* add GUIDs in order of priority */
-	if (priv->vendor != 0x0000 && priv->model != 0x0000 && priv->revision != 0x00) {
+	if (priv->vendor != 0x0000 && priv->model != 0x0000) {
 		g_autofree gchar *devid = NULL;
 		devid = g_strdup_printf ("%s\\VEN_%04X&DEV_%04X&REV_%02X",
 					 subsystem, priv->vendor,
@@ -343,6 +345,17 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 #endif
 }
 
+/**
+ * fu_udev_device_get_slot_depth:
+ * @self: A #FuUdevDevice
+ * @subsystem: a subsystem
+ *
+ * Determine how far up a chain a given device is
+ *
+ * Returns: unsigned integer
+ *
+ * Since: 1.2.4
+ **/
 guint
 fu_udev_device_get_slot_depth (FuUdevDevice *self, const gchar *subsystem)
 {
