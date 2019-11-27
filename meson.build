@@ -40,10 +40,14 @@ conf.set_quoted('PACKAGE_VERSION', fwupd_version)
 # - If the interface is the same as the previous version, but bugs are
 #   fixed, change:
 #      REVISION += 1
-lt_current = '2'
-lt_revision = '0'
-lt_age = '0'
-lt_version = '@0@.@1@.@2@'.format(lt_current, lt_age, lt_revision)
+libfwupd_lt_current = '2'
+libfwupd_lt_revision = '0'
+libfwupd_lt_age = '0'
+libfwupd_lt_version = '@0@.@1@.@2@'.format(libfwupd_lt_current, libfwupd_lt_age, libfwupd_lt_revision)
+libfwupdplugin_lt_current = '1'
+libfwupdplugin_lt_revision = '0'
+libfwupdplugin_lt_age = '0'
+libfwupdplugin_lt_version = '@0@.@1@.@2@'.format(libfwupdplugin_lt_current, libfwupdplugin_lt_age, libfwupdplugin_lt_revision)
 
 # get supported warning flags
 warning_flags = [
@@ -158,8 +162,12 @@ localstatedir = join_paths(prefix, get_option('localstatedir'))
 mandir = join_paths(prefix, get_option('mandir'))
 localedir = join_paths(prefix, get_option('localedir'))
 
+diffcmd = find_program('diff')
 gio = dependency('gio-2.0', version : '>= 2.45.8')
-giounix = dependency('gio-unix-2.0', version : '>= 2.45.8')
+giounix = dependency('gio-unix-2.0', version : '>= 2.45.8', required: false)
+if giounix.found()
+  conf.set('HAVE_GIO_UNIX', '1')
+endif
 if gio.version().version_compare ('>= 2.55.0')
   conf.set('HAVE_GIO_2_55_0', '1')
 endif
@@ -204,7 +212,7 @@ if get_option('gpg')
   conf.set('ENABLE_GPG', '1')
 endif
 libm = cc.find_library('m', required: false)
-libgcab = dependency('libgcab-1.0')
+libgcab = dependency('libgcab-1.0', fallback : ['gcab', 'gcab_dep'])
 if libgcab.version().version_compare('>= 0.8')
   conf.set('HAVE_GCAB_0_8', '1')
 endif
@@ -238,6 +246,9 @@ if cc.has_header('sys/errno.h')
 endif
 if cc.has_header('poll.h')
   conf.set('HAVE_POLL_H', '1')
+endif
+if cc.has_header('fnmatch.h')
+  conf.set('HAVE_FNMATCH_H', '1')
 endif
 if cc.has_function('getuid')
   conf.set('HAVE_GETUID', '1')
@@ -381,6 +392,8 @@ if build_standalone
   plugin_deps += gudev
 endif
 
+root_incdir = include_directories('.')
+
 if get_option('gtkdoc')
   gtkdocscan = find_program('gtkdoc-scan', required : true)
   subdir('docs')
@@ -392,6 +405,7 @@ endif
 if build_standalone
   subdir('data')
   subdir('po')
+  subdir('libfwupdplugin')
   subdir('src')
   subdir('plugins')
   subdir('contrib')

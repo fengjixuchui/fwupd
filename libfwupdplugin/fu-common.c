@@ -8,8 +8,14 @@
 
 #include <config.h>
 
+#ifdef HAVE_GIO_UNIX
 #include <gio/gunixinputstream.h>
+#endif
 #include <glib/gstdio.h>
+
+#ifdef HAVE_FNMATCH_H
+#include <fnmatch.h>
+#endif
 
 #include <archive_entry.h>
 #include <archive.h>
@@ -115,7 +121,7 @@ fu_common_get_file_list_internal (GPtrArray *files, const gchar *directory, GErr
  * If any path under @directory cannot be accessed due to permissions an error
  * will be returned.
  *
- * Returns: (transfer container): array of files, or %NULL for error
+ * Returns: (transfer container) (element-type utf8): array of files, or %NULL for error
  *
  * Since: 1.0.6
  **/
@@ -227,6 +233,7 @@ fu_common_get_contents_bytes (const gchar *filename, GError **error)
 GBytes *
 fu_common_get_contents_fd (gint fd, gsize count, GError **error)
 {
+#ifdef HAVE_GIO_UNIX
 	g_autoptr(GBytes) blob = NULL;
 	g_autoptr(GError) error_local = NULL;
 	g_autoptr(GInputStream) stream = NULL;
@@ -254,6 +261,13 @@ fu_common_get_contents_fd (gint fd, gsize count, GError **error)
 		return NULL;
 	}
 	return g_steal_pointer (&blob);
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "Not supported as <glib-unix.h> is unavailable");
+	return NULL;
+#endif
 }
 
 static gboolean
@@ -1624,6 +1638,29 @@ fu_common_realpath (const gchar *filename, GError **error)
 }
 
 /**
+ * fu_common_fnmatch:
+ * @pattern: a glob pattern, e.g. `*foo*`
+ * @str: a string to match against the pattern, e.g. `bazfoobar`
+ *
+ * Matches a string against a glob pattern.
+ *
+ * Return value: %TRUE if the string matched
+ *
+ * Since: 1.3.5
+ **/
+gboolean
+fu_common_fnmatch (const gchar *pattern, const gchar *str)
+{
+	g_return_val_if_fail (pattern != NULL, FALSE);
+	g_return_val_if_fail (str != NULL, FALSE);
+#ifdef HAVE_FNMATCH_H
+	return fnmatch (pattern, str, FNM_NOESCAPE) == 0;
+#else
+	return g_strcmp0 (pattern, str) == 0;
+#endif
+}
+
+/**
  * fu_common_strnsplit:
  * @str: a string to split
  * @sz: size of @str
@@ -1634,7 +1671,7 @@ fu_common_realpath (const gchar *filename, GError **error)
  * delimiter. If @max_tokens is reached, the remainder of string is appended
  * to the last token.
  *
- * Return value: a newly-allocated NULL-terminated array of strings
+ * Return value: (transfer full): a newly-allocated NULL-terminated array of strings
  *
  * Since: 1.3.1
  **/

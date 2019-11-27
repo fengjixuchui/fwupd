@@ -150,7 +150,7 @@ fu_device_set_property (GObject *object, guint prop_id,
  *
  * Gets the list of possible plugin names, typically added from quirk files.
  *
- * Returns: (element-type utf-8) (transfer container): plugin names
+ * Returns: (element-type utf8) (transfer container): plugin names
  *
  * Since: 1.3.3
  **/
@@ -2608,7 +2608,29 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 }
 
 /**
- * fu_device_incorporate_from_component:
+ * fu_device_incorporate_flag:
+ * @self: A #FuDevice
+ * @donor: Another #FuDevice
+ * @flag: A #FwupdDeviceFlags value
+ *
+ * Copy the value of a specific flag from the donor object.
+ *
+ * Since: 1.3.5
+ **/
+void
+fu_device_incorporate_flag (FuDevice *self, FuDevice *donor, FwupdDeviceFlags flag)
+{
+	if (fu_device_has_flag (donor, flag) && !fu_device_has_flag (self, flag)) {
+		g_debug ("donor set %s", fwupd_device_flag_to_string (flag));
+		fu_device_add_flag (self, flag);
+	} else if (!fu_device_has_flag (donor, flag) && fu_device_has_flag (self, flag)) {
+		g_debug ("donor unset %s", fwupd_device_flag_to_string (flag));
+		fu_device_remove_flag (self, flag);
+	}
+}
+
+/**
+ * fu_device_incorporate_from_component: (skip):
  * @device: A #FuDevice
  * @component: A #XbNode
  *
