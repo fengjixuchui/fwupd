@@ -146,12 +146,13 @@ static gboolean
 fu_util_filter_device (FuUtilPrivate *priv, FwupdDevice *dev)
 {
 	for (guint i = 0; i < 64; i++) {
-		if (priv->filter_include & (1 << i)) {
-			if (!fwupd_device_has_flag (dev, (1 << i)))
+		FwupdDeviceFlags flag = 1LLU << i;
+		if (priv->filter_include & flag) {
+			if (!fwupd_device_has_flag (dev, flag))
 				return FALSE;
 		}
-		if (priv->filter_exclude & (1 << i)) {
-			if (fwupd_device_has_flag (dev, (1 << i)))
+		if (priv->filter_exclude & flag) {
+			if (fwupd_device_has_flag (dev, flag))
 				return FALSE;
 		}
 	}
@@ -567,6 +568,8 @@ fu_util_download_if_required (FuUtilPrivate *priv, const gchar *perhapsfn, GErro
 	g_autoptr(SoupURI) uri = NULL;
 
 	/* a local file */
+	if (g_file_test (perhapsfn, G_FILE_TEST_EXISTS))
+		return g_strdup (perhapsfn);
 	uri = soup_uri_new (perhapsfn);
 	if (uri == NULL)
 		return g_strdup (perhapsfn);

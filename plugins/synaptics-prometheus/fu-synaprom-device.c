@@ -204,7 +204,8 @@ fu_synaprom_device_setup (FuDevice *device, GError **error)
 	}
 
 	/* add updatable config child, if this is a production sensor */
-	if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER) &&
+	if (fu_device_get_children (device)->len == 0 &&
+	    !fu_device_has_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER) &&
 	    pkt.security[1] & FU_SYNAPROM_SECURITY1_PROD_SENSOR) {
 		g_autoptr(FuSynapromConfig) cfg = fu_synaprom_config_new (self);
 		if (!fu_device_setup (FU_DEVICE (cfg), error)) {
@@ -237,7 +238,6 @@ fu_synaprom_device_prepare_fw (FuDevice *device,
 			       FwupdInstallFlags flags,
 			       GError **error)
 {
-	FuSynapromDevice *self = FU_SYNAPROM_DEVICE (device);
 	FuSynapromFirmwareMfwHeader hdr;
 	guint32 product;
 	g_autoptr(GBytes) blob = NULL;
@@ -273,23 +273,6 @@ fu_synaprom_device_prepare_fw (FuDevice *device,
 				     "MFW metadata not compatible, "
 				     "got 0x%02x expected 0x%02x",
 				     product, (guint) FU_SYNAPROM_PRODUCT_PROMETHEUS);
-			return NULL;
-		}
-	}
-	if (hdr.vmajor != self->vmajor || hdr.vminor != self->vminor) {
-		if (flags & FWUPD_INSTALL_FLAG_FORCE) {
-			g_warning ("MFW version not compatible, "
-				   "got %u.%u expected %u.%u",
-				   hdr.vmajor, hdr.vminor,
-				   self->vmajor, self->vminor);
-		} else {
-			g_set_error (error,
-				     G_IO_ERROR,
-				     G_IO_ERROR_NOT_SUPPORTED,
-				     "MFW version not compatible, "
-				     "got %u.%u expected %u.%u",
-				     hdr.vmajor, hdr.vminor,
-				     self->vmajor, self->vminor);
 			return NULL;
 		}
 	}
@@ -454,6 +437,7 @@ fu_synaprom_device_class_init (FuSynapromDeviceClass *klass)
 	klass_device->write_firmware = fu_synaprom_device_write_firmware;
 	klass_device->prepare_firmware = fu_synaprom_device_prepare_fw;
 	klass_device->setup = fu_synaprom_device_setup;
+	klass_device->reload = fu_synaprom_device_setup;
 	klass_device->attach = fu_synaprom_device_attach;
 	klass_device->detach = fu_synaprom_device_detach;
 	klass_usb_device->open = fu_synaprom_device_open;

@@ -115,13 +115,31 @@ fu_udev_device_get_sysfs_attr_as_uint8 (GUdevDevice *udev_device, const gchar *n
 #endif
 }
 
+#ifdef HAVE_GUDEV
+static void
+fu_udev_device_to_string_raw (GUdevDevice *udev_device, guint idt, GString *str)
+{
+	const gchar * const *keys;
+	keys = g_udev_device_get_property_keys (udev_device);
+	for (guint i = 0; keys[i] != NULL; i++) {
+		fu_common_string_append_kv (str, idt, keys[i],
+					    g_udev_device_get_property (udev_device, keys[i]));
+	}
+	keys = g_udev_device_get_sysfs_attr_keys (udev_device);
+	for (guint i = 0; keys[i] != NULL; i++) {
+		fu_common_string_append_kv (str, idt, keys[i],
+					    g_udev_device_get_sysfs_attr (udev_device, keys[i]));
+	}
+}
+#endif
+
 static void
 fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 {
 #ifdef HAVE_GUDEV
 	FuUdevDevice *self = FU_UDEV_DEVICE (device);
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
-	const gchar * const *keys;
+	g_autoptr(GUdevDevice) udev_parent = NULL;
 
 	if (priv->udev_device == NULL)
 		return;
@@ -129,17 +147,11 @@ fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 	if (g_getenv ("FU_UDEV_DEVICE_DEBUG") == NULL)
 		return;
 
-	keys = g_udev_device_get_property_keys (priv->udev_device);
-	for (guint i = 0; keys[i] != NULL; i++) {
-		fu_common_string_append_kv (str, idt, keys[i],
-					    g_udev_device_get_property (priv->udev_device,
-									keys[i]));
-	}
-	keys = g_udev_device_get_sysfs_attr_keys (priv->udev_device);
-	for (guint i = 0; keys[i] != NULL; i++) {
-		fu_common_string_append_kv (str, idt, keys[i],
-					    g_udev_device_get_sysfs_attr (priv->udev_device,
-									  keys[i]));
+	fu_udev_device_to_string_raw (priv->udev_device, idt, str);
+	udev_parent = g_udev_device_get_parent (priv->udev_device);
+	if (udev_parent != NULL) {
+		fu_common_string_append_kv (str, idt, "Parent", NULL);
+		fu_udev_device_to_string_raw (udev_parent, idt + 1, str);
 	}
 #endif
 }
@@ -332,6 +344,10 @@ static void
 fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 {
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
+#ifdef HAVE_GUDEV
+	const gchar *summary;
+	g_autoptr(GUdevDevice) parent = NULL;
+#endif
 
 	g_return_if_fail (FU_IS_UDEV_DEVICE (self));
 
@@ -342,6 +358,16 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 #ifdef HAVE_GUDEV
 	priv->subsystem = g_strdup (g_udev_device_get_subsystem (priv->udev_device));
 	priv->device_file = g_strdup (g_udev_device_get_device_file (priv->udev_device));
+
+	/* try to get one line summary */
+	summary = g_udev_device_get_sysfs_attr (priv->udev_device, "description");
+	if (summary == NULL) {
+		parent = g_udev_device_get_parent (priv->udev_device);
+		if (parent != NULL)
+			summary = g_udev_device_get_sysfs_attr (parent, "description");
+	}
+	if (summary != NULL)
+		fu_device_set_summary (FU_DEVICE (self), summary);
 #endif
 }
 

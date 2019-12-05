@@ -765,6 +765,8 @@ fu_util_download_if_required (FuUtilPrivate *priv, const gchar *perhapsfn, GErro
 
 	/* a local file */
 	uri = soup_uri_new (perhapsfn);
+	if (g_file_test (perhapsfn, G_FILE_TEST_EXISTS))
+		return g_strdup (perhapsfn);
 	if (uri == NULL)
 		return g_strdup (perhapsfn);
 
@@ -1163,13 +1165,10 @@ fu_util_activate (FuUtilPrivate *priv, gchar **values, GError **error)
 			has_pending = TRUE;
 		}
 	}
-	if (!has_pending) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOTHING_TO_DO,
-				     "No firmware to activate");
-		return FALSE;
 
+	if (!has_pending) {
+    		g_printerr ("No firmware to activate\n");
+    		return TRUE;
 	}
 
 	/* load engine */
