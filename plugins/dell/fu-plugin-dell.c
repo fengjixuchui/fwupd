@@ -655,7 +655,6 @@ fu_plugin_dell_detect_tpm (FuPlugin *plugin, GError **error)
 	g_autofree gchar *tpm_guid = NULL;
 	g_autofree gchar *tpm_guid_raw = NULL;
 	g_autofree gchar *tpm_id_alt = NULL;
-	g_autofree gchar *tpm_id = NULL;
 	g_autofree gchar *version_str = NULL;
 	struct tpm_status *out = NULL;
 	g_autoptr (FuDevice) dev_alt = NULL;
@@ -715,7 +714,6 @@ fu_plugin_dell_detect_tpm (FuPlugin *plugin, GError **error)
 
 	tpm_guid_raw = g_strdup_printf ("%04x-%s", system_id, tpm_mode);
 	tpm_guid = fwupd_guid_hash_string (tpm_guid_raw);
-	tpm_id = g_strdup_printf ("DELL-%s" G_GUINT64_FORMAT, tpm_guid);
 
 	tpm_guid_raw_alt = g_strdup_printf ("%04x-%s", system_id, tpm_mode_alt);
 	tpm_guid_alt = fwupd_guid_hash_string (tpm_guid_raw_alt);
@@ -732,8 +730,9 @@ fu_plugin_dell_detect_tpm (FuPlugin *plugin, GError **error)
 
 	/* build Standard device nodes */
 	dev = fu_device_new ();
-	fu_device_set_id (dev, tpm_id);
+	fu_device_set_physical_id (dev, "DEVNAME=/dev/tpm0");
 	fu_device_add_instance_id (dev, tpm_guid_raw);
+	fu_device_add_instance_id (dev, "system-tpm");
 	fu_device_set_vendor (dev, "Dell Inc.");
 	fu_device_set_name (dev, pretty_tpm_name);
 	fu_device_set_summary (dev, "Platform TPM device");
@@ -852,6 +851,9 @@ fu_plugin_init (FuPlugin *plugin)
 
 	/* make sure that UEFI plugin is ready to receive devices */
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_AFTER, "uefi");
+
+	/* our TPM device is upgradable! */
+	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_BETTER_THAN, "tpm");
 }
 
 void

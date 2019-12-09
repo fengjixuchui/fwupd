@@ -1156,22 +1156,15 @@ fu_engine_check_requirement_firmware (FuEngine *self, XbNode *req,
 	}
 
 	/* vendor ID */
-	if (g_strcmp0 (xb_node_get_text (req), "vendor-id") == 0) {
+	if (g_strcmp0 (xb_node_get_text (req), "vendor-id") == 0 &&
+	    fu_device_get_vendor_id (device_actual) != NULL) {
 		const gchar *version = fu_device_get_vendor_id (device_actual);
 		if (!fu_engine_require_vercmp (req, version, &error_local)) {
-			if (g_strcmp0 (xb_node_get_attr (req, "compare"), "ge") == 0) {
-				g_set_error (error,
-					     FWUPD_ERROR,
-					     FWUPD_ERROR_INVALID_FILE,
-					     "Not compatible with vendor %s, requires >= %s",
-					     version, xb_node_get_attr (req, "version"));
-			} else {
-				g_set_error (error,
-					     FWUPD_ERROR,
-					     FWUPD_ERROR_INVALID_FILE,
-					     "Not compatible with vendor: %s",
-					     error_local->message);
-			}
+			g_set_error (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_FILE,
+				     "Not compatible with vendor: %s",
+				     error_local->message);
 			return FALSE;
 		}
 		return TRUE;
@@ -1570,6 +1563,7 @@ fu_engine_install_tasks (FuEngine *self,
 static FwupdRelease *
 fu_engine_create_release_metadata (FuEngine *self, FuPlugin *plugin, GError **error)
 {
+	GPtrArray *metadata_sources;
 	const gchar *tmp;
 	g_autoptr(FwupdRelease) release = fwupd_release_new ();
 	g_autoptr(GHashTable) metadata_hash = NULL;
@@ -1584,6 +1578,26 @@ fu_engine_create_release_metadata (FuEngine *self, FuPlugin *plugin, GError **er
 	metadata_hash = fu_engine_get_report_metadata (self);
 	fwupd_release_add_metadata (release, metadata_hash);
 	fwupd_release_add_metadata (release, fu_plugin_get_report_metadata (plugin));
+
+	/* allow other plugins to contribute metadata too */
+	metadata_sources = fu_plugin_get_rules (plugin, FU_PLUGIN_RULE_METADATA_SOURCE);
+	for (guint i = 0; i < metadata_sources->len; i++) {
+		FuPlugin *plugin_tmp;
+		const gchar *plugin_name = g_ptr_array_index (metadata_sources, i);
+		g_autoptr(GError) error_local = NULL;
+
+		plugin_tmp = fu_plugin_list_find_by_name (self->plugin_list,
+							  plugin_name,
+							  &error_local);
+		if (plugin_tmp == NULL) {
+			g_warning ("could not add metadata for %s: %s",
+				   plugin_name,
+				   error_local->message);
+			continue;
+		}
+		fwupd_release_add_metadata (release,
+					    fu_plugin_get_report_metadata (plugin_tmp));
+	}
 
 	/* add details from os-release as metadata */
 	tmp = g_hash_table_lookup (os_release, "ID");
