@@ -36,6 +36,7 @@
 #include "fu-device-list.h"
 #include "fu-device-private.h"
 #include "fu-engine.h"
+#include "fu-engine-helper.h"
 #include "fu-hwids.h"
 #include "fu-idle.h"
 #include "fu-keyring-utils.h"
@@ -117,6 +118,14 @@ fu_engine_emit_changed (FuEngine *self)
 {
 	g_signal_emit (self, signals[SIGNAL_CHANGED], 0);
 	fu_engine_idle_reset (self);
+
+	/* update the motd */
+	if (self->loaded &&
+	    fu_config_get_update_motd (self->config)) {
+		g_autoptr(GError) error_local = NULL;
+		if (!fu_engine_update_motd (self, &error_local))
+			g_debug ("%s", error_local->message);
+	}
 }
 
 static void
@@ -551,6 +560,7 @@ fu_engine_modify_config (FuEngine *self, const gchar *key, const gchar *value, G
 		"BlacklistPlugins",
 		"IdleTimeout",
 		"VerboseDomains",
+		"UpdateMotd",
 		NULL };
 
 	g_return_val_if_fail (FU_IS_ENGINE (self), FALSE);
@@ -1913,6 +1923,10 @@ fu_engine_install_release (FuEngine *self,
 	if ((flags & FWUPD_INSTALL_FLAG_NO_HISTORY) == 0 &&
 	    !fu_history_modify_device (self->history, device, error))
 		return FALSE;
+
+	/* make the UI update */
+	fu_engine_emit_changed (self);
+
 	return TRUE;
 }
 
@@ -2531,7 +2545,6 @@ fu_engine_install_blob (FuEngine *self,
 
 	/* make the UI update */
 	fu_engine_set_status (self, FWUPD_STATUS_IDLE);
-	fu_engine_emit_changed (self);
 	g_debug ("Updating %s took %f seconds", fu_device_get_name (device),
 		 g_timer_elapsed (timer, NULL));
 	return TRUE;
@@ -2867,6 +2880,9 @@ fu_engine_remote_list_changed_cb (FuRemoteList *remote_list, FuEngine *self)
 					    &error_local))
 		g_warning ("Failed to reload metadata store: %s",
 			   error_local->message);
+
+	/* make the UI update */
+	fu_engine_emit_changed (self);
 }
 
 #ifdef HAVE_GIO_UNIX
@@ -3021,7 +3037,11 @@ fu_engine_update_metadata (FuEngine *self, const gchar *remote_id,
 						   bytes_sig, error))
 			return FALSE;
 	}
-	return fu_engine_load_metadata_store (self, FU_ENGINE_LOAD_FLAG_NONE, error);
+	if (!fu_engine_load_metadata_store (self, FU_ENGINE_LOAD_FLAG_NONE, error))
+		return FALSE;
+	fu_engine_emit_changed (self);
+	return TRUE;
+
 #else
 	g_set_error (error,
 		     FWUPD_ERROR,
@@ -4238,7 +4258,7 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 	/* does the device not have an assigned protocol */
 	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE) &&
 	    fu_device_get_protocol (device) == NULL) {
-		g_warning ("device %s [%s] does define an update protocol",
+		g_warning ("device %s [%s] does not define an update protocol",
 			   fu_device_get_id (device),
 			   fu_device_get_name (device));
 	}
@@ -4310,6 +4330,8 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 
 	/* sometimes inherit flags from recent history */
 	fu_engine_device_inherit_history (self, device);
+
+	fu_engine_emit_changed (self);
 }
 
 static void
@@ -4675,8 +4697,10 @@ fu_engine_get_tainted (FuEngine *self)
 const gchar *
 fu_engine_get_host_product (FuEngine *self)
 {
+	const gchar *result = NULL;
 	g_return_val_if_fail (FU_IS_ENGINE (self), NULL);
-	return fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_NAME);
+	result = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_NAME);
+	return result != NULL ? result : "Unknown Product";
 }
 
 const gchar *
@@ -5230,6 +5254,9 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 
 	fu_engine_set_status (self, FWUPD_STATUS_IDLE);
 	self->loaded = TRUE;
+
+	/* let clients know engine finished starting up */
+	fu_engine_emit_changed (self);
 
 	/* success */
 	return TRUE;
