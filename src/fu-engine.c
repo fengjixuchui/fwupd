@@ -29,6 +29,7 @@
 #include "fwupd-remote-private.h"
 #include "fwupd-resources.h"
 
+#include "fu-cabinet.h"
 #include "fu-common-cab.h"
 #include "fu-common.h"
 #include "fu-config.h"
@@ -263,66 +264,11 @@ fu_engine_device_changed_cb (FuDeviceList *device_list, FuDevice *device, FuEngi
 	fu_engine_emit_device_changed (self, device);
 }
 
-static gboolean
-fu_engine_set_device_version_format (FuEngine *self, FuDevice *device, XbNode *component, GError **error)
-{
-	FwupdVersionFormat fmt;
-	const gchar *developer_name;
-	const gchar *version_format;
-
-	/* specified in metadata */
-	version_format = xb_node_query_text (component,
-					     "custom/value[@key='LVFS::VersionFormat']",
-					     NULL);
-	if (version_format != NULL) {
-		fmt = fwupd_version_format_from_string (version_format);
-		if (fmt == FWUPD_VERSION_FORMAT_UNKNOWN) {
-			g_set_error (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "version format from metadata %s unsupported",
-				     version_format);
-			return FALSE;
-		}
-		g_debug ("using VersionFormat %s from metadata", version_format);
-		fu_device_set_version_format (device, fmt);
-		return TRUE;
-	}
-
-	/* fall back to the SmbiosManufacturer quirk */
-	developer_name = xb_node_query_text (component, "developer_name", NULL);
-	if (developer_name != NULL &&
-	    fu_device_has_flag (device, FWUPD_DEVICE_FLAG_INTERNAL)) {
-		g_autofree gchar *group = NULL;
-		group = g_strdup_printf ("SmbiosManufacturer=%s", developer_name);
-		version_format = fu_quirks_lookup_by_id (self->quirks, group,
-							 FU_QUIRKS_UEFI_VERSION_FORMAT);
-		if (version_format != NULL) {
-			fmt = fwupd_version_format_from_string (version_format);
-			if (fmt == FWUPD_VERSION_FORMAT_UNKNOWN) {
-				g_set_error (error,
-					     FWUPD_ERROR,
-					     FWUPD_ERROR_NOT_SUPPORTED,
-					     "version format %s from quirk %s unsupported",
-					     version_format, developer_name);
-				return FALSE;
-			}
-			g_debug ("using VersionFormat %s from SmbiosManufacturer %s",
-				  version_format, developer_name);
-			fu_device_set_version_format (device, fmt);
-			return TRUE;
-		}
-	}
-
-	/* nothing found, which is probably fine */
-	return TRUE;
-}
-
 /* convert hex and decimal versions to dotted style */
 static gchar *
 fu_engine_get_release_version (FuEngine *self, FuDevice *dev, XbNode *rel, GError **error)
 {
-	FwupdVersionFormat fmt = FWUPD_VERSION_FORMAT_TRIPLET;
+	FwupdVersionFormat fmt = fu_device_get_version_format (dev);
 	const gchar *version;
 	guint64 ver_uint32;
 
@@ -340,24 +286,14 @@ fu_engine_get_release_version (FuEngine *self, FuDevice *dev, XbNode *rel, GErro
 	if (g_strstr_len (version, -1, ".") != NULL)
 		return g_strdup (version);
 
-	/* specified in metadata or from a quirk */
-	fmt = fu_device_get_version_format (dev);
-	if (fmt == FWUPD_VERSION_FORMAT_UNKNOWN) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_NOT_SUPPORTED,
-			     "version format unset and version %s ambiguous",
-			     version);
-		return NULL;
-	}
-
 	/* don't touch my version! */
 	if (fmt == FWUPD_VERSION_FORMAT_PLAIN)
 		return g_strdup (version);
 
 	/* parse as integer */
 	ver_uint32 = fu_common_strtoull (version);
-	if (ver_uint32 == 0 || ver_uint32 > G_MAXUINT32)
+	if (fmt == FWUPD_VERSION_FORMAT_UNKNOWN ||
+	    ver_uint32 == 0 || ver_uint32 > G_MAXUINT32)
 		return g_strdup (version);
 
 	/* convert to dotted decimal */
@@ -1931,8 +1867,8 @@ fu_engine_install_release (FuEngine *self,
 	    g_strcmp0 (fu_device_get_version (device), version_rel) != 0) {
 		g_warning ("new device version '%s' was is not '%s', fixing up",
 			   fu_device_get_version (device), version_rel);
-		fu_device_set_version (device, version_rel,
-				       fu_device_get_version_format (device));
+		fu_device_set_version_format (device, fu_device_get_version_format (device));
+		fu_device_set_version (device, version_rel);
 	}
 
 	/* success */
@@ -2820,6 +2756,61 @@ fu_engine_md_refresh_device_name_category (FuEngine *self, FuDevice *device, XbN
 }
 
 static void
+_g_ptr_array_reverse (GPtrArray *array)
+{
+	guint last_idx = array->len - 1;
+	for (guint i = 0; i < array->len / 2; i++) {
+		gpointer tmp = array->pdata[i];
+		array->pdata[i] = array->pdata[last_idx - i];
+		array->pdata[last_idx - i] = tmp;
+	}
+}
+
+static void
+fu_engine_md_refresh_device_verfmt (FuEngine *self, FuDevice *device, XbNode *component)
+{
+	FwupdVersionFormat verfmt = FWUPD_VERSION_FORMAT_UNKNOWN;
+	g_autoptr(GPtrArray) verfmts = NULL;
+
+	/* require data */
+	if (component == NULL)
+		return;
+
+	/* get metadata */
+	verfmts = xb_node_query (component, "custom/value[@key='LVFS::VersionFormat']", 0, NULL);
+	if (verfmts == NULL)
+		return;
+	_g_ptr_array_reverse (verfmts);
+	for (guint i = 0; i < verfmts->len; i++) {
+		XbNode *value = g_ptr_array_index (verfmts, i);
+		verfmt = fwupd_version_format_from_string (xb_node_get_text (value));
+		if (verfmt != FWUPD_VERSION_FORMAT_UNKNOWN)
+			break;
+	}
+
+	/* found and different to existing */
+	if (verfmt != FWUPD_VERSION_FORMAT_UNKNOWN &&
+	    fu_device_get_version_format (device) != verfmt) {
+		fu_device_set_version_format (device, verfmt);
+		if (fu_device_get_version_raw (device) != 0x0) {
+			g_autofree gchar *version = NULL;
+			version = fu_common_version_from_uint32 (fu_device_get_version_raw (device), verfmt);
+			fu_device_set_version (device, version);
+		}
+		if (fu_device_get_version_lowest_raw (device) != 0x0) {
+			g_autofree gchar *version = NULL;
+			version = fu_common_version_from_uint32 (fu_device_get_version_lowest_raw (device), verfmt);
+			fu_device_set_version_lowest (device, version);
+		}
+		if (fu_device_get_version_bootloader_raw (device) != 0x0) {
+			g_autofree gchar *version = NULL;
+			version = fu_common_version_from_uint32 (fu_device_get_version_bootloader_raw (device), verfmt);
+			fu_device_set_version_bootloader (device, version);
+		}
+	}
+}
+
+static void
 fu_engine_md_refresh_device (FuEngine *self, FuDevice *device)
 {
 	g_autoptr(XbNode) component = fu_engine_get_component_by_guids (self, device);
@@ -2832,6 +2823,10 @@ fu_engine_md_refresh_device (FuEngine *self, FuDevice *device)
 		fu_engine_md_refresh_device_name (self, device, component);
 	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_MD_SET_NAME_CATEGORY))
 		fu_engine_md_refresh_device_name_category (self, device, component);
+
+	/* fix the version */
+	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_MD_SET_VERFMT))
+		fu_engine_md_refresh_device_verfmt (self, device, component);
 }
 
 static void
@@ -3192,6 +3187,7 @@ fu_engine_update_metadata (FuEngine *self, const gchar *remote_id,
 XbSilo *
 fu_engine_get_silo_from_blob (FuEngine *self, GBytes *blob_cab, GError **error)
 {
+	g_autoptr(FuCabinet) cabinet = fu_cabinet_new ();
 	g_autoptr(XbSilo) silo = NULL;
 
 	g_return_val_if_fail (FU_IS_ENGINE (self), NULL);
@@ -3200,12 +3196,10 @@ fu_engine_get_silo_from_blob (FuEngine *self, GBytes *blob_cab, GError **error)
 
 	/* load file */
 	fu_engine_set_status (self, FWUPD_STATUS_DECOMPRESSING);
-	silo = fu_common_cab_build_silo (blob_cab,
-					 fu_engine_get_archive_size_max (self),
-					 error);
-	if (silo == NULL)
+	fu_cabinet_set_size_max (cabinet, fu_engine_get_archive_size_max (self));
+	if (!fu_cabinet_parse (cabinet, blob_cab, FU_CABINET_PARSE_FLAG_NONE, error))
 		return NULL;
-
+	silo = fu_cabinet_get_silo (cabinet);
 	fu_engine_set_status (self, FWUPD_STATUS_IDLE);
 	return g_steal_pointer (&silo);
 }
@@ -3248,6 +3242,8 @@ fu_engine_get_result_from_component (FuEngine *self, XbNode *component, GError *
 			fu_device_set_name (dev, fu_device_get_name (device));
 			fu_device_set_flags (dev, fu_device_get_flags (device));
 			fu_device_set_id (dev, fu_device_get_id (device));
+			fu_device_set_version_format (dev, fu_device_get_version_format (device));
+			fu_device_set_version (dev, fu_device_get_version (device));
 		}
 
 		/* add GUID */
@@ -3260,10 +3256,6 @@ fu_engine_get_result_from_component (FuEngine *self, XbNode *component, GError *
 				     "component has no GUIDs");
 		return NULL;
 	}
-
-	/* get (or guess) the component version format */
-	if (!fu_engine_set_device_version_format (self, dev, component, error))
-		return NULL;
 
 	/* check we can install it */
 	task = fu_install_task_new (NULL, component);
@@ -5135,8 +5127,8 @@ fu_engine_update_history_device (FuEngine *self, FuDevice *dev_history, GError *
 			const gchar *csum = g_ptr_array_index (checksums, i);
 			fu_device_add_checksum (dev_history, csum);
 		}
-		fu_device_set_version (dev_history, fu_device_get_version (dev),
-				       fu_device_get_version_format (dev));
+		fu_device_set_version_format (dev_history, fu_device_get_version_format (dev));
+		fu_device_set_version (dev_history, fu_device_get_version (dev));
 		fu_device_remove_flag (dev_history, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION);
 		fu_device_set_update_state (dev_history, FWUPD_UPDATE_STATE_SUCCESS);
 		return fu_history_modify_device (self->history, dev_history, error);
@@ -5251,6 +5243,9 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	FuRemoteListLoadFlags remote_list_flags = FU_REMOTE_LIST_LOAD_FLAG_NONE;
 	FuQuirksLoadFlags quirks_flags = FU_QUIRKS_LOAD_FLAG_NONE;
 	g_autoptr(GPtrArray) checksums = NULL;
+#ifndef _WIN32
+	g_autoptr(GError) error_local = NULL;
+#endif
 
 	g_return_val_if_fail (FU_IS_ENGINE (self), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -5262,9 +5257,9 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 /* TODO: Read registry key [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography] "MachineGuid" */
 #ifndef _WIN32
 	/* cache machine ID so we can use it from a sandboxed app */
-	self->host_machine_id = fwupd_build_machine_id ("fwupd", error);
+	self->host_machine_id = fwupd_build_machine_id ("fwupd", &error_local);
 	if (self->host_machine_id == NULL)
-		return FALSE;
+		g_debug ("%s", error_local->message);
 #endif
 	/* read config file */
 	if (!fu_config_load (self->config, error)) {

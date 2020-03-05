@@ -18,7 +18,7 @@
 #include "fu-uefi-bgrt.h"
 #include "fu-uefi-common.h"
 #include "fu-uefi-device.h"
-#include "fu-uefi-vars.h"
+#include "fu-efivar.h"
 
 #ifndef HAVE_GIO_2_55_0
 #pragma clang diagnostic push
@@ -208,7 +208,7 @@ fu_plugin_uefi_write_splash_data (FuPlugin *plugin,
 
 	/* save to a predicatable filename */
 	directory = fu_uefi_get_esp_path_for_os (esp_path);
-	basename = g_strdup_printf ("fwupd-%s.cap", FU_UEFI_VARS_GUID_UX_CAPSULE);
+	basename = g_strdup_printf ("fwupd-%s.cap", FU_EFIVAR_GUID_UX_CAPSULE);
 	fn = g_build_filename (directory, "fw", basename, NULL);
 	if (!fu_common_mkdir_parent (fn, error))
 		return FALSE;
@@ -289,7 +289,7 @@ fu_plugin_uefi_update_splash (FuPlugin *plugin, FuDevice *device, GError **error
 	/* no UX capsule support, so deleting var if it exists */
 	if (fu_device_has_custom_flag (device, "no-ux-capsule")) {
 		g_debug ("not providing UX capsule");
-		return fu_uefi_vars_delete (FU_UEFI_VARS_GUID_FWUPDATE,
+		return fu_efivar_delete (FU_EFIVAR_GUID_FWUPDATE,
 					    "fwupd-ux-capsule", error);
 	}
 
@@ -463,30 +463,6 @@ fu_plugin_device_registered (FuPlugin *plugin, FuDevice *device)
 	}
 }
 
-static FwupdVersionFormat
-fu_plugin_uefi_get_version_format_for_type (FuPlugin *plugin, FuUefiDeviceKind device_kind)
-{
-	const gchar *content;
-	const gchar *quirk;
-	g_autofree gchar *group = NULL;
-
-	/* we have no information for devices */
-	if (device_kind == FU_UEFI_DEVICE_KIND_DEVICE_FIRMWARE)
-		return FWUPD_VERSION_FORMAT_TRIPLET;
-
-	content = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_MANUFACTURER);
-	if (content == NULL)
-		return FWUPD_VERSION_FORMAT_TRIPLET;
-
-	/* any quirks match */
-	group = g_strdup_printf ("SmbiosManufacturer=%s", content);
-	quirk = fu_plugin_lookup_quirk_by_id (plugin, group,
-					      FU_QUIRKS_UEFI_VERSION_FORMAT);
-	if (quirk == NULL)
-		return FWUPD_VERSION_FORMAT_TRIPLET;
-	return fwupd_version_format_from_string (quirk);
-}
-
 static const gchar *
 fu_plugin_uefi_uefi_type_to_string (FuUefiDeviceKind device_kind)
 {
@@ -519,12 +495,6 @@ static gboolean
 fu_plugin_uefi_coldplug_device (FuPlugin *plugin, FuUefiDevice *dev, GError **error)
 {
 	FuUefiDeviceKind device_kind;
-	FwupdVersionFormat version_format;
-
-	/* set default version format */
-	device_kind = fu_uefi_device_get_kind (dev);
-	version_format = fu_plugin_uefi_get_version_format_for_type (plugin, device_kind);
-	fu_device_set_version_format (FU_DEVICE (dev), version_format);
 
 	/* probe to get add GUIDs (and hence any quirk fixups) */
 	if (!fu_device_probe (FU_DEVICE (dev), error))
@@ -540,6 +510,7 @@ fu_plugin_uefi_coldplug_device (FuPlugin *plugin, FuUefiDevice *dev, GError **er
 	}
 
 	/* set fallback name if nothing else is set */
+	device_kind = fu_uefi_device_get_kind (dev);
 	if (fu_device_get_name (FU_DEVICE (dev)) == NULL) {
 		g_autofree gchar *name = NULL;
 		name = fu_plugin_uefi_get_name_for_type (plugin, device_kind);
@@ -574,7 +545,7 @@ static void
 fu_plugin_uefi_test_secure_boot (FuPlugin *plugin)
 {
 	const gchar *result_str = "Disabled";
-	if (fu_uefi_secure_boot_enabled ())
+	if (fu_efivar_secure_boot_enabled ())
 		result_str = "Enabled";
 	g_debug ("SecureBoot is: %s", result_str);
 	fu_plugin_add_report_metadata (plugin, "SecureBoot", result_str);
@@ -736,7 +707,8 @@ fu_plugin_unlock (FuPlugin *plugin, FuDevice *device, GError **error)
 	fu_device_set_flags (device_alt, device_flags_alt & ~FWUPD_DEVICE_FLAG_UPDATABLE);
 
 	/* make sure that this unlocked device can be updated */
-	fu_device_set_version (device, "0.0.0.0", FWUPD_VERSION_FORMAT_QUAD);
+	fu_device_set_version_format (device, FWUPD_VERSION_FORMAT_QUAD);
+	fu_device_set_version (device, "0.0.0.0");
 	return TRUE;
 }
 
@@ -746,19 +718,26 @@ fu_plugin_uefi_create_dummy (FuPlugin *plugin, const gchar *reason, GError **err
 	const gchar *key;
 	g_autoptr(FuDevice) dev = fu_device_new ();
 
+	fu_device_set_version_format (dev, FWUPD_VERSION_FORMAT_PLAIN);
 	key = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_MANUFACTURER);
 	if (key != NULL)
 		fu_device_set_vendor (dev, key);
+	key = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_VENDOR);
+	if (key != NULL) {
+		g_autofree gchar *vendor_id = g_strdup_printf ("DMI:%s", key);
+		fu_device_set_vendor_id (FU_DEVICE (dev), vendor_id);
+	}
 	key = fu_plugin_uefi_get_name_for_type (plugin, FU_UEFI_DEVICE_KIND_SYSTEM_FIRMWARE);
 	fu_device_set_name (dev, key);
 	key = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_VERSION);
 	if (key != NULL)
-		fu_device_set_version (dev, key, FWUPD_VERSION_FORMAT_PLAIN);
+		fu_device_set_version (dev, key);
 	fu_device_set_update_error (dev, reason);
 
 	fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_INTERNAL);
 	fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
 	fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_REQUIRE_AC);
+	fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_MD_SET_VERFMT);
 
 	fu_device_add_icon (dev, "computer");
 	fu_device_set_id (dev, "UEFI-dummy");
@@ -784,7 +763,7 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 	g_autoptr(GPtrArray) entries = NULL;
 
 	/* are the EFI dirs set up so we can update each device */
-	if (!fu_uefi_vars_supported (&error_local)) {
+	if (!fu_efivar_supported (&error_local)) {
 		const gchar *reason = "Firmware can not be updated in legacy mode, switch to UEFI mode";
 		g_warning ("%s", error_local->message);
 		return fu_plugin_uefi_create_dummy (plugin, reason, error);
@@ -807,7 +786,7 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 	/* if secure boot is enabled ensure we have a signed fwupd.efi */
 	bootloader = fu_uefi_get_built_app_path (&error_bootloader);
 	if (bootloader == NULL) {
-		if (fu_uefi_secure_boot_enabled ())
+		if (fu_efivar_secure_boot_enabled ())
 			g_prefix_error (&error_bootloader, "missing signed bootloader for secure boot: ");
 		g_warning ("%s", error_bootloader->message);
 	}

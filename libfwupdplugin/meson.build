@@ -1,5 +1,6 @@
 fwupdplugin_src = [
   'fu-archive.c',
+  'fu-cabinet.c',
   'fu-chunk.c',
   'fu-common.c',
   'fu-common-cab.c',
@@ -18,12 +19,14 @@ fwupdplugin_src = [
   'fu-quirks.c',
   'fu-smbios.c',
   'fu-srec-firmware.c',
+  'fu-efivar.c',
   'fu-udev-device.c',
   'fu-usb-device.c',
 ]
 
 fwupdplugin_headers = [
   'fu-archive.h',
+  'fu-cabinet.h',
   'fu-chunk.h',
   'fu-common.h',
   'fu-common-cab.h',
@@ -43,6 +46,7 @@ fwupdplugin_headers = [
   'fu-quirks.h',
   'fu-smbios.h',
   'fu-srec-firmware.h',
+  'fu-efivar.h',
   'fu-udev-device.h',
   'fu-usb-device.h',
 ]
