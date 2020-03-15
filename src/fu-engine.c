@@ -337,6 +337,9 @@ fu_engine_set_release_from_appstream (FuEngine *self,
 	if (tmp != NULL)
 		fwupd_release_set_vendor (rel, tmp);
 
+	/* refresh the device and release to the new version format too */
+	fu_engine_md_refresh_device_from_component (self, dev, component);
+
 	/* the version is fixed up at runtime */
 	version_rel = fu_engine_get_release_version (self, dev, release, error);
 	if (version_rel == NULL)
@@ -2075,20 +2078,28 @@ fu_engine_get_device_by_id (FuEngine *self, const gchar *device_id, GError **err
 {
 	g_autoptr(FuDevice) device1 = NULL;
 	g_autoptr(FuDevice) device2 = NULL;
+	g_autoptr(FuDevice) root = NULL;
 
 	/* find device */
 	device1 = fu_device_list_get_by_id (self->device_list, device_id, error);
 	if (device1 == NULL)
 		return NULL;
 
-	/* no replug required */
-	if (!fu_device_has_flag (device1, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG))
-		return g_steal_pointer (&device1);
-
 	/* wait for device to disconnect and reconnect */
-	if (!fu_device_list_wait_for_replug (self->device_list, device1, error)) {
-		g_prefix_error (error, "failed to wait for detach replug: ");
-		return NULL;
+	root = fu_device_get_root (device1);
+	if (fu_device_has_flag (device1, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG)) {
+		if (!fu_device_list_wait_for_replug (self->device_list, device1, error)) {
+			g_prefix_error (error, "failed to wait for detach replug: ");
+			return NULL;
+		}
+	} else if (fu_device_has_flag (root, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG)) {
+		if (!fu_device_list_wait_for_replug (self->device_list, root, error)) {
+			g_prefix_error (error, "failed to wait for detach replug: ");
+			return NULL;
+		}
+	} else {
+		/* no replug required */
+		return g_steal_pointer (&device1);
 	}
 
 	/* get the new device */
@@ -2811,14 +2822,9 @@ fu_engine_md_refresh_device_verfmt (FuEngine *self, FuDevice *device, XbNode *co
 	}
 }
 
-static void
-fu_engine_md_refresh_device (FuEngine *self, FuDevice *device)
+void
+fu_engine_md_refresh_device_from_component (FuEngine *self, FuDevice *device, XbNode *component)
 {
-	g_autoptr(XbNode) component = fu_engine_get_component_by_guids (self, device);
-
-	/* set or clear the SUPPORTED flag */
-	fu_engine_md_refresh_device_supported (self, device, component);
-
 	/* set the name */
 	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_MD_SET_NAME))
 		fu_engine_md_refresh_device_name (self, device, component);
@@ -2836,7 +2842,13 @@ fu_engine_md_refresh_devices (FuEngine *self)
 	g_autoptr(GPtrArray) devices = fu_device_list_get_all (self->device_list);
 	for (guint i = 0; i < devices->len; i++) {
 		FuDevice *device = g_ptr_array_index (devices, i);
-		fu_engine_md_refresh_device (self, device);
+		g_autoptr(XbNode) component = fu_engine_get_component_by_guids (self, device);
+
+		/* set or clear the SUPPORTED flag */
+		fu_engine_md_refresh_device_supported (self, device, component);
+
+		/* fixup the name and format as needed */
+		fu_engine_md_refresh_device_from_component (self, device, component);
 	}
 }
 
@@ -3243,6 +3255,7 @@ fu_engine_get_result_from_component (FuEngine *self, XbNode *component, GError *
 			fu_device_set_name (dev, fu_device_get_name (device));
 			fu_device_set_flags (dev, fu_device_get_flags (device));
 			fu_device_set_id (dev, fu_device_get_id (device));
+			fu_device_set_version_raw (dev, fu_device_get_version_raw (device));
 			fu_device_set_version_format (dev, fu_device_get_version_format (device));
 			fu_device_set_version (dev, fu_device_get_version (device));
 		}
@@ -3380,6 +3393,7 @@ fu_engine_get_details (FuEngine *self, gint fd, GError **error)
 			fwupd_release_set_remote_id (rel, remote_id);
 			fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_SUPPORTED);
 		}
+		fu_engine_md_refresh_device_from_component (self, dev, component);
 		g_ptr_array_add (details, dev);
 	}
 	return g_steal_pointer (&details);
