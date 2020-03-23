@@ -87,14 +87,14 @@ fu_vli_usbhub_device_i2c_read_status (FuVliUsbhubDevice *self,
 
 gboolean
 fu_vli_usbhub_device_i2c_write_data (FuVliUsbhubDevice *self,
-				     guint8 skip_s,
-				     guint8 skip_p,
+				     guint8 disable_start_bit,
+				     guint8 disable_end_bit,
 				     const guint8 *buf,
 				     gsize bufsz,
 				     GError **error)
 {
 	GUsbDevice *usb_device = fu_usb_device_get_dev (FU_USB_DEVICE (self));
-	guint16 value = (((guint16) skip_s) << 8) | skip_p;
+	guint16 value = (((guint16) disable_start_bit) << 8) | disable_end_bit;
 	if (g_getenv ("FWUPD_VLI_USBHUB_VERBOSE") != NULL)
 		fu_common_dump_raw (G_LOG_DOMAIN, "I2cWriteData", buf, bufsz);
 	if (!g_usb_device_control_transfer (usb_device,
@@ -636,9 +636,12 @@ fu_vli_usbhub_device_setup (FuVliDevice *device, GError **error)
 		fu_device_set_install_duration (FU_DEVICE (self), 15); /* seconds */
 		break;
 	default:
-		g_warning ("unknown update protocol, device_id=0x%x",
-			   GUINT16_FROM_BE(self->hd1_hdr.dev_id));
-		break;
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_SUPPORTED,
+			     "hardware is not supported, dev_id=0x%x",
+			     GUINT16_FROM_BE(self->hd1_hdr.dev_id));
+		return FALSE;
 	}
 
 	/* read HD2 (update) header */
