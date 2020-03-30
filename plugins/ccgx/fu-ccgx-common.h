@@ -22,3 +22,25 @@ typedef struct __attribute__((packed)) {
 	guint8	reserved3[4];		/* reserved */
 	guint32	boot_seq;		/* boot sequence number */
 } CCGxMetaData;
+
+/* firmware mode in device */
+typedef enum {
+	FW_MODE_BOOT = 0,
+	FW_MODE_FW1,
+	FW_MODE_FW2,
+	FW_MODE_LAST
+} FWMode;
+
+/* firmware image type */
+typedef enum {
+	FW_IMAGE_TYPE_UNKNOWN = 0,
+	FW_IMAGE_TYPE_SINGLE,
+	FW_IMAGE_TYPE_DUAL_SYMMETRIC,
+	FW_IMAGE_TYPE_DUAL_ASYMMETRIC,
+} FWImageType;
+
+gchar		*fu_ccgx_version_to_string		(guint32	 val);
+const gchar	*fu_ccgx_fw_mode_to_string		(FWMode		 val);
+FWMode		 fu_ccgx_fw_mode_get_alternate		(FWMode		 val);
+const gchar	*fu_ccgx_fw_image_type_to_string	(FWImageType	 val);
+FWImageType	 fu_ccgx_fw_image_type_from_string	(const gchar	*val);
