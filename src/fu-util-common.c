@@ -682,6 +682,11 @@ fu_util_release_get_name (FwupdRelease *release)
 			 * the first %s is the system name, e.g. 'ThinkPad P50` */
 			return g_strdup_printf (_("%s Thunderbolt Controller Update"), name);
 		}
+		if (g_strcmp0 (cat, "X-CpuMicrocode") == 0) {
+			/* TRANSLATORS: the CPU microcode is firmware loaded onto the CPU
+			 * at system bootup */
+			return g_strdup_printf (_("%s CPU Microcode Update"), name);
+		}
 	}
 
 	/* TRANSLATORS: this is the fallback where we don't know if the release
@@ -1286,6 +1291,29 @@ fu_util_license_to_string (const gchar *license)
 	return license;
 }
 
+static const gchar *
+fu_util_release_urgency_to_string (FwupdReleaseUrgency release_urgency)
+{
+	if (release_urgency == FWUPD_RELEASE_URGENCY_LOW) {
+		/* TRANSLATORS: the release urgency */
+		return _("Low");
+	}
+	if (release_urgency == FWUPD_RELEASE_URGENCY_MEDIUM) {
+		/* TRANSLATORS: the release urgency */
+		return _("Medium");
+	}
+	if (release_urgency == FWUPD_RELEASE_URGENCY_HIGH) {
+		/* TRANSLATORS: the release urgency */
+		return _("High");
+	}
+	if (release_urgency == FWUPD_RELEASE_URGENCY_CRITICAL) {
+		/* TRANSLATORS: the release urgency */
+		return _("Critical");
+	}
+	/* TRANSLATORS: unknown release urgency */
+	return _("Unknown");
+}
+
 gchar *
 fu_util_release_to_string (FwupdRelease *rel, guint idt)
 {
@@ -1325,6 +1353,19 @@ fu_util_release_to_string (FwupdRelease *rel, guint idt)
 		tmp = g_format_size (fwupd_release_get_size (rel));
 		/* TRANSLATORS: file size of the download */
 		fu_common_string_append_kv (str, idt + 1, _("Size"), tmp);
+	}
+	if (fwupd_release_get_created (rel) != 0) {
+		gint64 value = (gint64) fwupd_release_get_created (rel);
+		g_autoptr(GDateTime) date = g_date_time_new_from_unix_utc (value);
+		g_autofree gchar *tmp = g_date_time_format (date, "%F");
+		/* TRANSLATORS: when the update was built */
+		fu_common_string_append_kv (str, idt + 1, _("Created"), tmp);
+	}
+	if (fwupd_release_get_urgency (rel) != FWUPD_RELEASE_URGENCY_UNKNOWN) {
+		FwupdReleaseUrgency tmp = fwupd_release_get_urgency (rel);
+		/* TRANSLATORS: how important the release is */
+		fu_common_string_append_kv (str, idt + 1, _("Urgency"),
+					    fu_util_release_urgency_to_string (tmp));
 	}
 	if (fwupd_release_get_details_url (rel) != NULL) {
 		/* TRANSLATORS: more details about the update link */

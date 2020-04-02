@@ -51,8 +51,10 @@ typedef struct {
 	gchar				*version;
 	gchar				*remote_id;
 	guint64				 size;
+	guint64				 created;
 	guint32				 install_duration;
 	FwupdReleaseFlags		 flags;
+	FwupdReleaseUrgency		 urgency;
 	gchar				*update_message;
 } FwupdReleasePrivate;
 
@@ -825,6 +827,41 @@ fwupd_release_set_size (FwupdRelease *release, guint64 size)
 }
 
 /**
+ * fwupd_release_get_created:
+ * @release: A #FwupdRelease
+ *
+ * Gets when the update was created.
+ *
+ * Returns: UTC timestamp in UNIX format, or 0 if unset
+ *
+ * Since: 1.4.0
+ **/
+guint64
+fwupd_release_get_created (FwupdRelease *release)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_val_if_fail (FWUPD_IS_RELEASE (release), 0);
+	return priv->created;
+}
+
+/**
+ * fwupd_release_set_created:
+ * @release: A #FwupdRelease
+ * @created: UTC timestamp in UNIX format
+ *
+ * Sets when the update was created.
+ *
+ * Since: 1.4.0
+ **/
+void
+fwupd_release_set_created (FwupdRelease *release, guint64 created)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_if_fail (FWUPD_IS_RELEASE (release));
+	priv->created = created;
+}
+
+/**
  * fwupd_release_get_summary:
  * @release: A #FwupdRelease
  *
@@ -1131,6 +1168,41 @@ fwupd_release_has_flag (FwupdRelease *release, FwupdReleaseFlags flag)
 }
 
 /**
+ * fwupd_release_get_urgency:
+ * @release: A #FwupdRelease
+ *
+ * Gets the release urgency.
+ *
+ * Returns: the release urgency, or 0 if unset
+ *
+ * Since: 1.4.0
+ **/
+FwupdReleaseUrgency
+fwupd_release_get_urgency (FwupdRelease *release)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_val_if_fail (FWUPD_IS_RELEASE (release), 0);
+	return priv->urgency;
+}
+
+/**
+ * fwupd_release_set_urgency:
+ * @release: A #FwupdRelease
+ * @urgency: the release urgency, e.g. %FWUPD_RELEASE_FLAG_TRUSTED_PAYLOAD
+ *
+ * Sets the release urgency.
+ *
+ * Since: 1.4.0
+ **/
+void
+fwupd_release_set_urgency (FwupdRelease *release, FwupdReleaseUrgency urgency)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_if_fail (FWUPD_IS_RELEASE (release));
+	priv->urgency = urgency;
+}
+
+/**
  * fwupd_release_get_install_duration:
  * @release: A #FwupdRelease
  *
@@ -1262,6 +1334,11 @@ fwupd_release_to_variant (FwupdRelease *release)
 				       FWUPD_RESULT_KEY_SIZE,
 				       g_variant_new_uint64 (priv->size));
 	}
+	if (priv->created != 0) {
+		g_variant_builder_add (&builder, "{sv}",
+				       FWUPD_RESULT_KEY_CREATED,
+				       g_variant_new_uint64 (priv->created));
+	}
 	if (priv->summary != NULL) {
 		g_variant_builder_add (&builder, "{sv}",
 				       FWUPD_RESULT_KEY_SUMMARY,
@@ -1335,6 +1412,11 @@ fwupd_release_to_variant (FwupdRelease *release)
 				       FWUPD_RESULT_KEY_TRUST_FLAGS,
 				       g_variant_new_uint64 (priv->flags));
 	}
+	if (priv->urgency != 0) {
+		g_variant_builder_add (&builder, "{sv}",
+				       FWUPD_RESULT_KEY_URGENCY,
+				       g_variant_new_uint32 (priv->urgency));
+	}
 	if (g_hash_table_size (priv->metadata) > 0) {
 		g_variant_builder_add (&builder, "{sv}",
 				       FWUPD_RESULT_KEY_METADATA,
@@ -1392,6 +1474,10 @@ fwupd_release_from_key_value (FwupdRelease *release, const gchar *key, GVariant 
 		fwupd_release_set_size (release, g_variant_get_uint64 (value));
 		return;
 	}
+	if (g_strcmp0 (key, FWUPD_RESULT_KEY_CREATED) == 0) {
+		fwupd_release_set_created (release, g_variant_get_uint64 (value));
+		return;
+	}
 	if (g_strcmp0 (key, FWUPD_RESULT_KEY_SUMMARY) == 0) {
 		fwupd_release_set_summary (release, g_variant_get_string (value, NULL));
 		return;
@@ -1445,6 +1531,10 @@ fwupd_release_from_key_value (FwupdRelease *release, const gchar *key, GVariant 
 	}
 	if (g_strcmp0 (key, FWUPD_RESULT_KEY_TRUST_FLAGS) == 0) {
 		fwupd_release_set_flags (release, g_variant_get_uint64 (value));
+		return;
+	}
+	if (g_strcmp0 (key, FWUPD_RESULT_KEY_URGENCY) == 0) {
+		fwupd_release_set_urgency (release, g_variant_get_uint32 (value));
 		return;
 	}
 	if (g_strcmp0 (key, FWUPD_RESULT_KEY_INSTALL_DURATION) == 0) {
@@ -1588,6 +1678,7 @@ fwupd_release_to_json (FwupdRelease *release, JsonBuilder *builder)
 	}
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_LICENSE, priv->license);
 	fwupd_release_json_add_int (builder, FWUPD_RESULT_KEY_SIZE, priv->size);
+	fwupd_release_json_add_int (builder, FWUPD_RESULT_KEY_CREATED, priv->created);
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_URI, priv->uri);
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_HOMEPAGE, priv->homepage);
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_DETAILS_URL, priv->details_url);
@@ -1661,10 +1752,15 @@ fwupd_release_to_string (FwupdRelease *release)
 	}
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_LICENSE, priv->license);
 	fwupd_pad_kv_siz (str, FWUPD_RESULT_KEY_SIZE, priv->size);
+	fwupd_pad_kv_siz (str, FWUPD_RESULT_KEY_CREATED, priv->created);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_URI, priv->uri);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_HOMEPAGE, priv->homepage);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_DETAILS_URL, priv->details_url);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_SOURCE_URL, priv->source_url);
+	if (priv->urgency != FWUPD_RELEASE_URGENCY_UNKNOWN) {
+		fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_URGENCY,
+				  fwupd_release_urgency_to_string (priv->urgency));
+	}
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_VENDOR, priv->vendor);
 	fwupd_pad_kv_tfl (str, FWUPD_RESULT_KEY_FLAGS, priv->flags);
 	fwupd_pad_kv_int (str, FWUPD_RESULT_KEY_INSTALL_DURATION, priv->install_duration);
