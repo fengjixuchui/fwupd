@@ -151,9 +151,11 @@ fu_wac_module_refresh (FuWacModule *self, GError **error)
 	if (priv->command != buf[2] || priv->status != buf[3]) {
 		priv->command = buf[2];
 		priv->status = buf[3];
-		g_debug ("command: %s, status: %s",
-			 fu_wac_module_command_to_string (priv->command),
-			 fu_wac_module_status_to_string (priv->status));
+		if (g_getenv ("FWUPD_WACOM_VERBOSE") != NULL) {
+			g_debug ("command: %s, status: %s",
+				 fu_wac_module_command_to_string (priv->command),
+				 fu_wac_module_status_to_string (priv->status));
+		}
 	}
 
 	/* success */
@@ -175,6 +177,10 @@ fu_wac_module_set_feature (FuWacModule *self,
 			 [1] = priv->fw_type,
 			 [2] = command,
 			 [3 ... FU_WAC_PACKET_LEN - 1] = 0xff };
+
+	/* sanity check */
+	g_return_val_if_fail (FU_IS_WAC_MODULE (self), FALSE);
+	g_return_val_if_fail (FU_IS_WAC_DEVICE (parent_device), FALSE);
 
 	/* verify the size of the blob */
 	if (blob != NULL) {
@@ -254,6 +260,16 @@ fu_wac_module_set_feature (FuWacModule *self,
 	return TRUE;
 }
 
+static gboolean
+fu_wac_module_cleanup (FuDevice *device, FwupdInstallFlags flags, GError **error)
+{
+	FuDevice *parent = fu_device_get_parent (device);
+	g_autoptr(FuDeviceLocker) locker = fu_device_locker_new (parent, error);
+	if (locker == NULL)
+		return FALSE;
+	return fu_device_cleanup (parent, flags, error);
+}
+
 static void
 fu_wac_module_get_property (GObject *object, guint prop_id,
 			    GValue *value, GParamSpec *pspec)
@@ -295,6 +311,9 @@ fu_wac_module_set_property (GObject *object, guint prop_id,
 static void
 fu_wac_module_init (FuWacModule *self)
 {
+	fu_device_set_protocol (FU_DEVICE (self), "com.wacom.usb");
+	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_PAIR);
+	fu_device_set_remove_delay (FU_DEVICE (self), FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
 }
 
 static void
@@ -361,4 +380,5 @@ fu_wac_module_class_init (FuWacModuleClass *klass)
 	object_class->constructed = fu_wac_module_constructed;
 	object_class->finalize = fu_wac_module_finalize;
 	klass_device->to_string = fu_wac_module_to_string;
+	klass_device->cleanup = fu_wac_module_cleanup;
 }

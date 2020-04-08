@@ -313,6 +313,36 @@ fu_device_list_get_by_guids (FuDeviceList *self, GPtrArray *guids)
 	return NULL;
 }
 
+static FuDeviceItem *
+fu_device_list_get_by_guids_removed (FuDeviceList *self, GPtrArray *guids)
+{
+	g_autoptr(GRWLockReaderLocker) locker = g_rw_lock_reader_locker_new (&self->devices_mutex);
+	g_return_val_if_fail (locker != NULL, NULL);
+	for (guint i = 0; i < self->devices->len; i++) {
+		FuDeviceItem *item = g_ptr_array_index (self->devices, i);
+		if (item->remove_id == 0)
+			continue;
+		for (guint j = 0; j < guids->len; j++) {
+			const gchar *guid = g_ptr_array_index (guids, j);
+			if (fu_device_has_guid (item->device, guid))
+				return item;
+		}
+	}
+	for (guint i = 0; i < self->devices->len; i++) {
+		FuDeviceItem *item = g_ptr_array_index (self->devices, i);
+		if (item->device_old == NULL)
+			continue;
+		if (item->remove_id == 0)
+			continue;
+		for (guint j = 0; j < guids->len; j++) {
+			const gchar *guid = g_ptr_array_index (guids, j);
+			if (fu_device_has_guid (item->device_old, guid))
+				return item;
+		}
+	}
+	return NULL;
+}
+
 static gboolean
 fu_device_list_device_delayed_remove_cb (gpointer user_data)
 {
@@ -327,17 +357,7 @@ fu_device_list_device_delayed_remove_cb (gpointer user_data)
 	children = fu_device_get_children (item->device);
 	for (guint j = 0; j < children->len; j++) {
 		FuDevice *child = g_ptr_array_index (children, j);
-		FuDeviceItem *child_item = fu_device_list_find_by_id (self,
-								      fu_device_get_id (child),
-								      NULL);
-		if (child_item == NULL) {
-			g_debug ("device %s not found", fu_device_get_id (child));
-			continue;
-		}
 		fu_device_list_emit_device_removed (self, child);
-		g_rw_lock_writer_lock (&self->devices_mutex);
-		g_ptr_array_remove (self->devices, child_item);
-		g_rw_lock_writer_unlock (&self->devices_mutex);
 	}
 
 	/* just remove now */
@@ -413,17 +433,7 @@ fu_device_list_remove (FuDeviceList *self, FuDevice *device)
 	children = fu_device_get_children (device);
 	for (guint j = 0; j < children->len; j++) {
 		FuDevice *child = g_ptr_array_index (children, j);
-		FuDeviceItem *child_item = fu_device_list_find_by_id (self,
-								      fu_device_get_id (child),
-								      NULL);
-		if (child_item == NULL) {
-			g_debug ("device %s not found", fu_device_get_id (child));
-			continue;
-		}
 		fu_device_list_emit_device_removed (self, child);
-		g_rw_lock_writer_lock (&self->devices_mutex);
-		g_ptr_array_remove (self->devices, child_item);
-		g_rw_lock_writer_unlock (&self->devices_mutex);
 	}
 
 	/* remove right now */
@@ -440,8 +450,14 @@ fu_device_list_add_missing_guids (FuDevice *device_new, FuDevice *device_old)
 	for (guint i = 0; i < guids_old->len; i++) {
 		const gchar *guid_tmp = g_ptr_array_index (guids_old, i);
 		if (!fu_device_has_guid (device_new, guid_tmp)) {
-			g_debug ("adding GUID %s to device", guid_tmp);
-			fu_device_add_counterpart_guid (device_new, guid_tmp);
+			if (fu_device_has_flag (device_new, FWUPD_DEVICE_FLAG_ADD_COUNTERPART_GUIDS)) {
+				g_debug ("adding GUID %s to device", guid_tmp);
+				fu_device_add_counterpart_guid (device_new, guid_tmp);
+			} else {
+				g_debug ("not adding GUID %s to device, use "
+					 "FWUPD_DEVICE_FLAG_ADD_COUNTERPART_GUIDS if required",
+					 guid_tmp);
+			}
 		}
 	}
 }
@@ -568,14 +584,23 @@ fu_device_list_add (FuDeviceList *self, FuDevice *device)
 		return;
 	}
 
-	/* verify a compatible device does not already exist */
-	item = fu_device_list_get_by_guids (self, fu_device_get_guids (device));
-	if (item == NULL) {
-		item = fu_device_list_find_by_connection (self,
-							  fu_device_get_physical_id (device),
-							  fu_device_get_logical_id (device));
-	}
+	/* verify a device with same connection does not already exist */
+	item = fu_device_list_find_by_connection (self,
+						  fu_device_get_physical_id (device),
+						  fu_device_get_logical_id (device));
 	if (item != NULL && item->remove_id != 0) {
+		g_debug ("found physical device %s recently removed, reusing "
+			 "item from plugin %s for plugin %s",
+			 fu_device_get_id (item->device),
+			 fu_device_get_plugin (item->device),
+			 fu_device_get_plugin (device));
+		fu_device_list_replace (self, item, device);
+		return;
+	}
+
+	/* verify a compatible device does not already exist */
+	item = fu_device_list_get_by_guids_removed (self, fu_device_get_guids (device));
+	if (item != NULL) {
 		g_debug ("found compatible device %s recently removed, reusing "
 			 "item from plugin %s for plugin %s",
 			 fu_device_get_id (item->device),
@@ -586,6 +611,7 @@ fu_device_list_add (FuDeviceList *self, FuDevice *device)
 	}
 
 	/* added the same device, supporting same protocol, from a different plugin */
+	item = fu_device_list_get_by_guids (self, fu_device_get_guids (device));
 	if (item != NULL &&
 	    g_strcmp0 (fu_device_get_plugin (item->device),
 		       fu_device_get_plugin (device)) != 0 &&
