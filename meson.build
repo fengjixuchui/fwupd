@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.4.0',
+  version : '1.4.1',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -21,6 +21,9 @@ conf.set_quoted('PACKAGE_VERSION', fwupd_version)
 git = find_program('git', required : false)
 if git.found()
   source_version = run_command(git, 'describe').stdout().strip()
+  if source_version == ''
+    source_version = fwupd_version
+  endif
 else
   source_version = fwupd_version
 endif
@@ -72,6 +75,7 @@ warning_flags = [
   '-Wincompatible-pointer-types-discards-qualifiers',
   '-Winit-self',
   '-Wlogical-op',
+  '-Wmaybe-uninitialized',
   '-Wmissing-declarations',
   '-Wmissing-format-attribute',
   '-Wmissing-include-dirs',

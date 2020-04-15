@@ -508,8 +508,8 @@ fu_logitech_hidpp_peripheral_setup (FuDevice *device, GError **error)
 	/* did not get ID */
 	if (self->hidpp_id == HIDPP_DEVICE_ID_UNSET) {
 		g_set_error_literal (error,
-				     G_IO_ERROR,
-				     G_IO_ERROR_FAILED,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
 				     "no HID++ ID");
 		return FALSE;
 	}
@@ -623,6 +623,12 @@ fu_logitech_hidpp_peripheral_detach (FuDevice *device, GError **error)
 	FuLogitechHidPpPeripheral *self = FU_UNIFYING_PERIPHERAL (device);
 	guint8 idx;
 	g_autoptr(FuLogitechHidPpHidppMsg) msg = fu_logitech_hidpp_msg_new ();
+
+	/* sanity check */
+	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER)) {
+		g_debug ("already in bootloader mode, skipping");
+		return TRUE;
+	}
 
 	/* this requires user action */
 	idx = fu_logitech_hidpp_peripheral_feature_get_idx (self, HIDPP_FEATURE_DFU_CONTROL);
@@ -960,6 +966,12 @@ fu_logitech_hidpp_peripheral_attach (FuDevice *device, GError **error)
 	FuLogitechHidPpPeripheral *self = FU_UNIFYING_PERIPHERAL (device);
 	guint8 idx;
 	g_autoptr(FuLogitechHidPpHidppMsg) msg = fu_logitech_hidpp_msg_new ();
+
+	/* sanity check */
+	if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER)) {
+		g_debug ("already in runtime mode, skipping");
+		return TRUE;
+	}
 
 	/* if we're in bootloader mode, we should be able to get this feature */
 	idx = fu_logitech_hidpp_peripheral_feature_get_idx (self, HIDPP_FEATURE_DFU);

@@ -643,6 +643,13 @@ fu_device_set_parent (FuDevice *self, FuDevice *parent)
 
 	g_return_if_fail (FU_IS_DEVICE (self));
 
+	/* if unspecified, always child before parent */
+	if (parent != NULL &&
+	    fu_device_get_order (parent) == fu_device_get_order (self)) {
+		g_debug ("auto-setting %s order", fu_device_get_id (parent));
+		fu_device_set_order (parent, fu_device_get_order (self) + 1);
+	}
+
 	if (priv->parent != NULL)
 		g_object_remove_weak_pointer (G_OBJECT (priv->parent), (gpointer *) &priv->parent);
 	if (parent != NULL)
@@ -650,7 +657,8 @@ fu_device_set_parent (FuDevice *self, FuDevice *parent)
 	priv->parent = parent;
 
 	/* this is what goes over D-Bus */
-	fu_device_set_parent_id (self, parent != NULL ? fu_device_get_id (parent) : NULL);
+	fwupd_device_set_parent_id (FWUPD_DEVICE (self),
+				    parent != NULL ? fu_device_get_id (parent) : NULL);
 }
 
 /**
@@ -1858,6 +1866,17 @@ fu_device_get_physical_id (FuDevice *self)
 void
 fu_device_add_flag (FuDevice *self, FwupdDeviceFlags flag)
 {
+	/* none is not used as an "exported" flag */
+	if (flag == FWUPD_DEVICE_FLAG_NONE)
+		return;
+
+	/* being both a bootloader and requiring a bootloader is invalid */
+	if (flag & FWUPD_DEVICE_FLAG_NEEDS_BOOTLOADER)
+		fu_device_remove_flag (self, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
+	if (flag & FWUPD_DEVICE_FLAG_IS_BOOTLOADER)
+		fu_device_remove_flag (self, FWUPD_DEVICE_FLAG_NEEDS_BOOTLOADER);
+
+	/* one implies the other */
 	if (flag & FWUPD_DEVICE_FLAG_CAN_VERIFY_IMAGE)
 		flag |= FWUPD_DEVICE_FLAG_CAN_VERIFY;
 	if (flag & FWUPD_DEVICE_FLAG_INSTALL_ALL_RELEASES)
@@ -1870,24 +1889,20 @@ fu_device_set_custom_flag (FuDevice *self, const gchar *hint)
 {
 	FwupdDeviceFlags flag;
 
+	/* is this a negated device flag */
+	if (g_str_has_prefix (hint, "~")) {
+		flag = fwupd_device_flag_from_string (hint + 1);
+		if (flag != FWUPD_DEVICE_FLAG_UNKNOWN)
+			fu_device_remove_flag (self, flag);
+		return;
+	}
+
 	/* is this a known device flag */
 	flag = fwupd_device_flag_from_string (hint);
-	if (flag == FWUPD_DEVICE_FLAG_UNKNOWN)
-		return;
-
-	/* being both a bootloader and requiring a bootloader is invalid */
-	if (flag == FWUPD_DEVICE_FLAG_NONE ||
-	    flag == FWUPD_DEVICE_FLAG_NEEDS_BOOTLOADER) {
-		fu_device_remove_flag (self, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
-	}
-	if (flag == FWUPD_DEVICE_FLAG_NONE ||
-	    flag == FWUPD_DEVICE_FLAG_IS_BOOTLOADER) {
-		fu_device_remove_flag (self, FWUPD_DEVICE_FLAG_NEEDS_BOOTLOADER);
-	}
-
-	/* none is not used as an "exported" flag */
-	if (flag != FWUPD_DEVICE_FLAG_NONE)
+	if (flag != FWUPD_DEVICE_FLAG_UNKNOWN) {
 		fu_device_add_flag (self, flag);
+		return;
+	}
 }
 
 /**
@@ -2131,6 +2146,10 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 		g_autofree gchar *sz = g_strdup_printf ("%" G_GUINT64_FORMAT, priv->size_max);
 		fu_common_string_append_kv (str, idt + 1, "FirmwareSizeMax", sz);
 	}
+	if (priv->order > 0)
+		fu_common_string_append_ku (str, idt + 1, "Order", priv->order);
+	if (priv->priority > 0)
+		fu_common_string_append_ku (str, idt + 1, "Priority", priv->priority);
 	keys = g_hash_table_get_keys (priv->metadata);
 	for (GList *l = keys; l != NULL; l = l->next) {
 		const gchar *key = l->data;
