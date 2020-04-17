@@ -36,6 +36,7 @@ typedef struct {
 	gchar				*equivalent_id;
 	gchar				*physical_id;
 	gchar				*logical_id;
+	gchar				*proxy_guid;
 	FuDevice			*alternate;
 	FuDevice			*parent;	/* noref */
 	FuDevice			*proxy;		/* noref */
@@ -52,6 +53,7 @@ typedef struct {
 	guint				 poll_id;
 	gboolean			 done_probe;
 	gboolean			 done_setup;
+	gboolean			 device_id_valid;
 	guint64				 size_min;
 	guint64				 size_max;
 	gint				 open_refcount;	/* atomic */
@@ -658,6 +660,13 @@ fu_device_set_parent (FuDevice *self, FuDevice *parent)
 		fu_device_set_order (parent, fu_device_get_order (self) + 1);
 	}
 
+	/* if the parent has quirks, make the child inherit it */
+	if (parent != NULL) {
+		if (fu_device_get_quirks (self) == NULL &&
+		    fu_device_get_quirks (parent) != NULL)
+			fu_device_set_quirks (self, fu_device_get_quirks (parent));
+	}
+
 	if (priv->parent != NULL)
 		g_object_remove_weak_pointer (G_OBJECT (priv->parent), (gpointer *) &priv->parent);
 	if (parent != NULL)
@@ -1003,6 +1012,10 @@ fu_device_set_quirk_kv (FuDevice *self,
 	}
 	if (g_strcmp0 (key, FU_QUIRKS_PARENT_GUID) == 0) {
 		fu_device_add_parent_guid (self, value);
+		return TRUE;
+	}
+	if (g_strcmp0 (key, FU_QUIRKS_PROXY_GUID) == 0) {
+		fu_device_set_proxy_guid (self, value);
 		return TRUE;
 	}
 	if (g_strcmp0 (key, FU_QUIRKS_FIRMWARE_SIZE_MIN) == 0) {
@@ -1593,6 +1606,7 @@ fu_device_set_id (FuDevice *self, const gchar *id)
 	id_hash = g_compute_checksum_for_string (G_CHECKSUM_SHA1, id, -1);
 	g_debug ("using %s for %s", id_hash, id);
 	fwupd_device_set_id (FWUPD_DEVICE (self), id_hash);
+	priv->device_id_valid = TRUE;
 
 	/* ensure the parent ID is set */
 	for (guint i = 0; i < priv->children->len; i++) {
@@ -1773,7 +1787,7 @@ fu_device_ensure_id (FuDevice *self, GError **error)
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* already set */
-	if (fu_device_get_id (self) != NULL)
+	if (priv->device_id_valid)
 		return TRUE;
 
 	/* nothing we can do! */
@@ -1831,6 +1845,45 @@ fu_device_set_logical_id (FuDevice *self, const gchar *logical_id)
 	g_return_if_fail (FU_IS_DEVICE (self));
 	g_free (priv->logical_id);
 	priv->logical_id = g_strdup (logical_id);
+	priv->device_id_valid = FALSE;
+	g_object_notify (G_OBJECT (self), "logical-id");
+}
+
+/**
+ * fu_device_get_proxy_guid:
+ * @self: A #FuDevice
+ *
+ * Gets the proxy GUID device, which which is set to let the engine match up the
+ * proxy between plugins.
+ *
+ * Returns: a string value, or %NULL if never set.
+ *
+ * Since: 1.4.1
+ **/
+const gchar *
+fu_device_get_proxy_guid (FuDevice *self)
+{
+	FuDevicePrivate *priv = GET_PRIVATE (self);
+	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
+	return priv->proxy_guid;
+}
+
+/**
+ * fu_device_set_proxy_guid:
+ * @self: A #FuDevice
+ * @proxy_guid: a string, e.g. `USB\VID_413C&PID_B06E&hub`
+ *
+ * Sets the GUID of the proxy device. The proxy device may update @self.
+ *
+ * Since: 1.4.1
+ **/
+void
+fu_device_set_proxy_guid (FuDevice *self, const gchar *proxy_guid)
+{
+	FuDevicePrivate *priv = GET_PRIVATE (self);
+	g_return_if_fail (FU_IS_DEVICE (self));
+	g_free (priv->proxy_guid);
+	priv->proxy_guid = g_strdup (proxy_guid);
 }
 
 /**
@@ -1890,6 +1943,8 @@ fu_device_set_physical_id (FuDevice *self, const gchar *physical_id)
 	g_return_if_fail (physical_id != NULL);
 	g_free (priv->physical_id);
 	priv->physical_id = g_strdup (physical_id);
+	priv->device_id_valid = FALSE;
+	g_object_notify (G_OBJECT (self), "physical-id");
 }
 
 /**
@@ -1922,7 +1977,6 @@ fu_device_get_physical_id (FuDevice *self)
  *
  * Since: 0.1.0
  **/
-
 void
 fu_device_add_flag (FuDevice *self, FwupdDeviceFlags flag)
 {
@@ -2199,7 +2253,9 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 	if (priv->logical_id != NULL)
 		fu_common_string_append_kv (str, idt + 1, "LogicalId", priv->logical_id);
 	if (priv->proxy != NULL)
-		fu_common_string_append_kv (str, idt + 1, "Proxy", fu_device_get_id (priv->proxy));
+		fu_common_string_append_kv (str, idt + 1, "ProxyId", fu_device_get_id (priv->proxy));
+	if (priv->proxy_guid != NULL)
+		fu_common_string_append_kv (str, idt + 1, "ProxyGuid", priv->proxy_guid);
 	if (priv->size_min > 0) {
 		g_autofree gchar *sz = g_strdup_printf ("%" G_GUINT64_FORMAT, priv->size_min);
 		fu_common_string_append_kv (str, idt + 1, "FirmwareSizeMin", sz);
@@ -2653,6 +2709,10 @@ fu_device_open (FuDevice *self, GError **error)
 	if (!fu_device_setup (self, error))
 		return FALSE;
 
+	/* ensure the device ID is still valid */
+	if (!fu_device_ensure_id (self, error))
+		return FALSE;
+
 	/* success */
 	return TRUE;
 }
@@ -2936,6 +2996,8 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 		fu_device_set_logical_id (self, priv_donor->logical_id);
 	if (priv->proxy == NULL && priv_donor->proxy != NULL)
 		fu_device_set_proxy (self, priv_donor->proxy);
+	if (priv->proxy_guid == NULL && priv_donor->proxy_guid != NULL)
+		fu_device_set_proxy_guid (self, priv_donor->proxy_guid);
 	if (priv->quirks == NULL)
 		fu_device_set_quirks (self, fu_device_get_quirks (donor));
 	g_rw_lock_reader_lock (&priv_donor->parent_guids_mutex);
@@ -2955,6 +3017,10 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 
 	/* now the base class, where all the interesting bits are */
 	fwupd_device_incorporate (FWUPD_DEVICE (self), FWUPD_DEVICE (donor));
+
+	/* set by the superclass */
+	if (fu_device_get_id (self) != NULL)
+		priv->device_id_valid = TRUE;
 
 	/* optional subclass */
 	if (klass->incorporate != NULL)
@@ -3046,6 +3112,7 @@ fu_device_class_init (FuDeviceClass *klass)
 				     G_PARAM_READWRITE |
 				     G_PARAM_CONSTRUCT |
 				     G_PARAM_STATIC_NAME);
+	g_object_class_install_property (object_class, PROP_PARENT, pspec);
 
 	pspec = g_param_spec_object ("proxy", NULL, NULL,
 				     FU_TYPE_DEVICE,
@@ -3096,6 +3163,7 @@ fu_device_finalize (GObject *object)
 	g_free (priv->equivalent_id);
 	g_free (priv->physical_id);
 	g_free (priv->logical_id);
+	g_free (priv->proxy_guid);
 
 	G_OBJECT_CLASS (fu_device_parent_class)->finalize (object);
 }

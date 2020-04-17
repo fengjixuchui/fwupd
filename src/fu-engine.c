@@ -1455,6 +1455,8 @@ fu_engine_install_tasks (FuEngine *self,
 	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	for (guint i = 0; i < install_tasks->len; i++) {
 		FuInstallTask *task = g_ptr_array_index (install_tasks, i);
+		g_debug ("composite update %u: %s", i + 1,
+			 fu_device_get_id (fu_install_task_get_device (task)));
 		g_ptr_array_add (devices, g_object_ref (fu_install_task_get_device (task)));
 	}
 	if (!fu_engine_composite_prepare (self, devices, error)) {
@@ -2122,8 +2124,10 @@ fu_engine_device_prepare (FuEngine *self,
 			  GError **error)
 {
 	g_autoptr(FuDeviceLocker) locker = fu_device_locker_new (device, error);
-	if (locker == NULL)
+	if (locker == NULL) {
+		g_prefix_error (error, "failed to open device for prepare: ");
 		return FALSE;
+	}
 	return fu_device_prepare (device, flags, error);
 }
 
@@ -2142,8 +2146,10 @@ fu_engine_device_cleanup (FuEngine *self,
 	}
 
 	locker = fu_device_locker_new (device, error);
-	if (locker == NULL)
+	if (locker == NULL) {
+		g_prefix_error (error, "failed to open device for cleanup: ");
 		return FALSE;
+	}
 	return fu_device_cleanup (device, flags, error);
 }
 
@@ -2419,8 +2425,10 @@ fu_engine_firmware_read (FuEngine *self,
 
 	/* open, detach, read, attach, serialize */
 	locker = fu_device_locker_new (device, error);
-	if (locker == NULL)
+	if (locker == NULL) {
+		g_prefix_error (error, "failed to open device for firmware read: ");
 		return NULL;
+	}
 	if (!fu_device_detach (device, error))
 		return NULL;
 	firmware = fu_device_read_firmware (device, error);
@@ -4391,6 +4399,54 @@ fu_engine_adopt_children (FuEngine *self, FuDevice *device)
 }
 
 static void
+fu_engine_set_proxy_device (FuEngine *self, FuDevice *device)
+{
+	GPtrArray *guids;
+	g_autoptr(FuDevice) proxy = NULL;
+	g_autoptr(GPtrArray) devices = NULL;
+
+	if (fu_device_get_proxy (device) != NULL)
+		return;
+	if (fu_device_get_proxy_guid (device) == NULL)
+		return;
+
+	/* find the proxy GUID in any existing device */
+	proxy = fu_device_list_get_by_guid (self->device_list,
+					    fu_device_get_proxy_guid (device),
+					    NULL);
+	if (proxy != NULL) {
+		g_debug ("setting proxy of %s to %s for %s",
+			 fu_device_get_id (proxy),
+			 fu_device_get_id (device),
+			 fu_device_get_proxy_guid (device));
+		fu_device_set_proxy (device, proxy);
+		return;
+	}
+
+	/* are we the parent of an existing device */
+	guids = fu_device_get_guids (device);
+	for (guint j = 0; j < guids->len; j++) {
+		const gchar *guid = g_ptr_array_index (guids, j);
+		devices = fu_device_list_get_active (self->device_list);
+		for (guint i = 0; i < devices->len; i++) {
+			FuDevice *device_tmp = g_ptr_array_index (devices, i);
+			if (g_strcmp0 (fu_device_get_proxy_guid (device_tmp), guid) == 0) {
+				g_debug ("adding proxy of %s to %s for %s",
+					 fu_device_get_id (device),
+					 fu_device_get_id (device_tmp),
+					 guid);
+				fu_device_set_proxy (device_tmp, device);
+				return;
+			}
+		}
+	}
+
+	/* nothing found */
+	g_warning ("did not find proxy device %s",
+		   fu_device_get_proxy_guid (device));
+}
+
+static void
 fu_engine_device_inherit_history (FuEngine *self, FuDevice *device)
 {
 	g_autoptr(FuDevice) device_history = NULL;
@@ -4424,6 +4480,7 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 {
 	GPtrArray *blacklisted_devices;
 	GPtrArray *device_guids;
+	g_autoptr(XbNode) component = NULL;
 
 	/* device has no GUIDs set! */
 	device_guids = fu_device_get_guids (device);
@@ -4460,8 +4517,8 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 	}
 
 	/* if this device is locked get some metadata from AppStream */
+	component = fu_engine_get_component_by_guids (self, device);
 	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_LOCKED)) {
-		g_autoptr(XbNode) component = fu_engine_get_component_by_guids (self, device);
 		if (component != NULL) {
 			g_autoptr(XbNode) release = NULL;
 			release = xb_node_query_first (component,
@@ -4487,6 +4544,9 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 
 	/* adopt any required children, which may or may not already exist */
 	fu_engine_adopt_children (self, device);
+
+	/* set the proxy device if specified by GUID */
+	fu_engine_set_proxy_device (self, device);
 
 	/* set any alternate objects on the device from the ID */
 	if (fu_device_get_alternate_id (device) != NULL) {
@@ -4525,6 +4585,10 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 
 	/* create new device */
 	fu_device_list_add (self->device_list, device);
+
+	/* fixup the name and format as needed from cached metadata */
+	if (component != NULL)
+		fu_engine_md_refresh_device_from_component (self, device, component);
 
 	/* match the metadata so clients can tell if the device is worthy */
 	fu_engine_ensure_device_supported (self, device);
