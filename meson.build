@@ -219,6 +219,10 @@ libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gca
 gcab = find_program('gcab', required : true)
 bashcomp = dependency('bash-completion', required: false)
 python3 = find_program('python3')
+tpm2tss = dependency('tss2-esys', version : '>= 2.0', required: false)
+if tpm2tss.found()
+  conf.set('HAVE_TSS2', '1')
+endif
 
 platform_deps = []
 if get_option('default_library') != 'static'
@@ -267,8 +271,8 @@ if cc.has_function('pwrite', args : '-D_XOPEN_SOURCE')
   conf.set('HAVE_PWRITE', '1')
 endif
 
-if build_standalone and get_option('plugin_tpm')
-  tpm2tss = dependency('tss2-esys', version : '>= 2.0')
+if build_standalone and get_option('plugin_tpm') and not tpm2tss.found()
+  error('tss2-esys is required for -Dplugin_tpm=true')
 endif
 
 if build_standalone and get_option('plugin_uefi')
@@ -280,7 +284,6 @@ if build_standalone and get_option('plugin_uefi')
   efiboot = dependency('efiboot')
   objcopy = find_program ('objcopy')
   readelf = find_program ('readelf')
-  tpm2tss = dependency('tss2-esys', version : '>= 2.0')
   genpeimg = find_program ('genpeimg', required: false)
 
   efi_app_location = join_paths(libexecdir, 'fwupd', 'efi')
@@ -349,11 +352,16 @@ if build_standalone and get_option('systemd')
   systemd = dependency('systemd', version : '>= 211')
   conf.set('HAVE_SYSTEMD' , '1')
   conf.set('HAVE_LOGIND' , '1')
-  systemdunitdir = get_option('systemdunitdir')
-  if systemdunitdir == '' and get_option('systemd')
+  systemd_root_prefix = get_option('systemd_root_prefix')
+  if systemd_root_prefix == ''
     systemdunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir')
+    systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir')
+    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir')
+  else
+    systemdunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir', define_variable: ['rootprefix', systemd_root_prefix])
+    systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir', define_variable: ['rootprefix', systemd_root_prefix])
+    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: ['rootprefix', systemd_root_prefix])
   endif
-  systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir')
 endif
 
 if build_standalone and get_option('elogind')

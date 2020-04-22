@@ -167,17 +167,11 @@ fu_util_filter_device (FuUtilPrivate *priv, FwupdDevice *dev)
 }
 
 static FwupdDevice *
-fu_util_prompt_for_device (FuUtilPrivate *priv, GError **error)
+fu_util_prompt_for_device (FuUtilPrivate *priv, GPtrArray *devices, GError **error)
 {
 	FwupdDevice *dev;
 	guint idx;
-	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(GPtrArray) devices_filtered = NULL;
-
-	/* get devices from daemon */
-	devices = fwupd_client_get_devices (priv->client, NULL, error);
-	if (devices == NULL)
-		return NULL;
 
 	/* filter results */
 	devices_filtered = g_ptr_array_new ();
@@ -1035,10 +1029,35 @@ fu_util_get_history (FuUtilPrivate *priv, gchar **values, GError **error)
 	return TRUE;
 }
 
-static FwupdDevice*
+static FwupdDevice *
+fu_util_get_device_by_id (FuUtilPrivate *priv, const gchar *id, GError **error)
+{
+	if (fwupd_guid_is_valid (id)) {
+		g_autoptr(GPtrArray) devices = NULL;
+		devices = fwupd_client_get_devices_by_guid (priv->client, id,
+							    NULL, error);
+		if (devices == NULL)
+			return NULL;
+		return fu_util_prompt_for_device (priv, devices, error);
+	}
+	/* did this look like a GUID? */
+	for (guint i = 0; id[i] != '\0'; i++) {
+		if (id[i] == '-') {
+			g_set_error_literal (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_INVALID_ARGS,
+					     "Invalid arguments");
+			return NULL;
+		}
+	}
+	return fwupd_client_get_device_by_id (priv->client, id, NULL, error);
+}
+
+static FwupdDevice *
 fu_util_get_device_or_prompt (FuUtilPrivate *priv, gchar **values, GError **error)
 {
 	FwupdDevice *dev = NULL;
+	g_autoptr(GPtrArray) devices = NULL;
 
 	/* get device to use */
 	if (g_strv_length (values) >= 1) {
@@ -1047,13 +1066,17 @@ fu_util_get_device_or_prompt (FuUtilPrivate *priv, gchar **values, GError **erro
 			for (guint i = 1; i < g_strv_length (values); i++)
 				g_debug ("Ignoring extra input %s", values[i]);
 		}
-		dev = fwupd_client_get_device_by_id (priv->client, values[0],
-						     NULL, &error_local);
+		dev = fu_util_get_device_by_id (priv, values[0], &error_local);
 		if (dev != NULL)
 			return dev;
 		g_print ("%s\n",  error_local->message);
 	}
-	return fu_util_prompt_for_device (priv, error);
+
+	/* get all devices from daemon */
+	devices = fwupd_client_get_devices (priv->client, NULL, error);
+	if (devices == NULL)
+		return NULL;
+	return fu_util_prompt_for_device (priv, devices, error);
 }
 
 static gboolean
@@ -1947,7 +1970,7 @@ fu_util_update_by_id (FuUtilPrivate *priv, const gchar *device_id, GError **erro
 	g_autoptr(GPtrArray) rels = NULL;
 
 	/* do not allow a partial device-id */
-	dev = fwupd_client_get_device_by_id (priv->client, device_id, NULL, error);
+	dev = fu_util_get_device_by_id (priv, device_id, error);
 	if (dev == NULL)
 		return FALSE;
 
@@ -2533,7 +2556,7 @@ main (int argc, char *argv[])
 		     fu_util_report_history);
 	fu_util_cmd_array_add (cmd_array,
 		     "install",
-		     "FILE [DEVICE-ID]",
+		     "FILE [DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Install a firmware file on this hardware"),
 		     fu_util_install);
@@ -2551,25 +2574,25 @@ main (int argc, char *argv[])
 		     fu_util_get_updates);
 	fu_util_cmd_array_add (cmd_array,
 		     "update,upgrade",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Updates all firmware to latest versions available"),
 		     fu_util_update);
 	fu_util_cmd_array_add (cmd_array,
 		     "verify",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Checks cryptographic hash matches firmware"),
 		     fu_util_verify);
 	fu_util_cmd_array_add (cmd_array,
 		     "unlock",
-		     "DEVICE-ID",
+		     "DEVICE-ID|GUID",
 		     /* TRANSLATORS: command description */
 		     _("Unlocks the device for firmware access"),
 		     fu_util_unlock);
 	fu_util_cmd_array_add (cmd_array,
 		     "clear-results",
-		     "DEVICE-ID",
+		     "DEVICE-ID|GUID",
 		     /* TRANSLATORS: command description */
 		     _("Clears the results from the last update"),
 		     fu_util_clear_results);
@@ -2581,13 +2604,13 @@ main (int argc, char *argv[])
 		     fu_util_clear_offline);
 	fu_util_cmd_array_add (cmd_array,
 		     "get-results",
-		     "DEVICE-ID",
+		     "DEVICE-ID|GUID",
 		     /* TRANSLATORS: command description */
 		     _("Gets the results from the last update"),
 		     fu_util_get_results);
 	fu_util_cmd_array_add (cmd_array,
 		     "get-releases",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Gets the releases for a device"),
 		     fu_util_get_releases);
@@ -2599,7 +2622,7 @@ main (int argc, char *argv[])
 		     fu_util_get_remotes);
 	fu_util_cmd_array_add (cmd_array,
 		     "downgrade",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Downgrades the firmware on a device"),
 		     fu_util_downgrade);
@@ -2611,7 +2634,7 @@ main (int argc, char *argv[])
 		     fu_util_refresh);
 	fu_util_cmd_array_add (cmd_array,
 		     "verify-update",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Update the stored cryptographic hash with current ROM contents"),
 		     fu_util_verify_update);
@@ -2635,7 +2658,7 @@ main (int argc, char *argv[])
 		     fu_util_remote_disable);
 	fu_util_cmd_array_add (cmd_array,
 		     "activate",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Activate devices"),
 		     fu_util_activate);
@@ -2659,7 +2682,7 @@ main (int argc, char *argv[])
 		     fu_util_modify_config);
 	fu_util_cmd_array_add (cmd_array,
 		     "reinstall",
-		     "[DEVICE-ID]",
+		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
 		     _("Reinstall current firmware on the device."),
 		     fu_util_reinstall);
