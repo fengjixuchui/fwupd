@@ -7,6 +7,7 @@ subdir('ep963x')
 subdir('fastboot')
 subdir('fresco-pd')
 subdir('jabra')
+subdir('linux-swap')
 subdir('steelseries')
 subdir('dell-dock')
 subdir('nitrokey')
@@ -37,16 +38,25 @@ endif
 # depends on dfu
 subdir('csr')
 
-if get_option('plugin_tpm') and get_option('gudev')
+if get_option('plugin_tpm')
+if not get_option('gudev')
+  error('gudev is required for plugin_tpm')
+endif
 subdir('tpm')
 subdir('tpm-eventlog')
 endif
 
-if get_option('plugin_emmc') and get_option('gudev')
+if get_option('plugin_emmc')
+if not get_option('gudev')
+  error('gudev is required for plugin_emmc')
+endif
 subdir('emmc')
 endif
 
-if get_option('plugin_nvme') and get_option('gudev')
+if get_option('plugin_nvme')
+if not get_option('gudev')
+  error('gudev is required for plugin_nvme')
+endif
 subdir('nvme')
 endif
 
@@ -54,7 +64,10 @@ if get_option('plugin_modem_manager')
 subdir('modem-manager')
 endif
 
-if get_option('plugin_altos') and get_option('gudev')
+if get_option('plugin_altos')
+if not get_option('gudev')
+  error('gudev is required for plugin_altos')
+endif
 subdir('altos')
 endif
 
@@ -62,9 +75,11 @@ if get_option('plugin_amt')
 subdir('amt')
 endif
 
-if get_option('plugin_thunderbolt') and get_option('gudev')
+if get_option('plugin_thunderbolt')
+if not get_option('gudev')
+  error('gudev is required for plugin_thunderbolt')
+endif
 subdir('thunderbolt')
-subdir('thunderbolt-power')
 endif
 
 if get_option('plugin_redfish')
@@ -76,7 +91,10 @@ subdir('dell')
 subdir('dell-esrt')
 endif
 
-if get_option('plugin_synaptics') and get_option('gudev')
+if get_option('plugin_synaptics')
+if not get_option('gudev')
+  error('gudev is required for plugin_synaptics_mst')
+endif
 subdir('synaptics-mst')
 endif
 

@@ -85,3 +85,7 @@ gboolean	 fu_udev_device_pread			(FuUdevDevice	*self,
 							 goffset	 port,
 							 guint8		*data,
 							 GError		**error);
+const gchar	*fu_udev_device_get_sysfs_attr		 (FuUdevDevice	*self,
+							  const gchar	*attr,
+							  GError	**error);
+gchar		*fu_udev_device_get_parent_name		(FuUdevDevice	*self);
