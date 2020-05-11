@@ -63,6 +63,7 @@ warning_flags = [
   '-Wcast-align',
   '-Wclobbered',
   '-Wdeclaration-after-statement',
+  '-Wdiscarded-qualifiers',
   '-Wduplicated-branches',
   '-Wduplicated-cond',
   '-Wempty-body',
@@ -87,7 +88,6 @@ warning_flags = [
   '-Wno-address-of-packed-member',  # incompatible with g_autoptr()
   '-Wno-unknown-pragmas',
   '-Wno-deprecated-declarations',
-  '-Wno-discarded-qualifiers',
   '-Wno-missing-field-initializers',
   '-Wno-strict-aliasing',
   '-Wno-suggest-attribute=format',
@@ -288,6 +288,14 @@ if build_standalone and get_option('plugin_uefi')
 
   efi_app_location = join_paths(libexecdir, 'fwupd', 'efi')
   conf.set_quoted ('EFI_APP_LOCATION', efi_app_location)
+
+  # e.g. could be:
+  # * /usr/share/dbxtool for Red Hat
+  # * /usr/share/secureboot/updates/dbx for Ubuntu
+  efi_dbxdir = get_option('efi_dbxdir')
+  if efi_dbxdir != ''
+    conf.set_quoted ('FWUPD_EFI_DBXDIR', efi_dbxdir)
+  endif
 
   efi_arch = host_machine.cpu_family()
   if efi_arch == 'x86'

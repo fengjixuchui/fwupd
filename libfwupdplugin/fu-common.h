@@ -57,6 +57,8 @@ typedef guint FuEndianType;
  * @FU_PATH_KIND_POLKIT_ACTIONS:	The directory for policy kit actions (IE /usr/share/polkit-1/actions/)
  * @FU_PATH_KIND_OFFLINE_TRIGGER:	The file for the offline trigger (IE /system-update)
  * @FU_PATH_KIND_SYSFSDIR_SECURITY:	The sysfs security location (IE /sys/kernel/security)
+ * @FU_PATH_KIND_EFIDBXDIR:		The location of the EFI dbx files
+ * @FU_PATH_KIND_ACPI_TABLES:		The location of the ACPI tables
  *
  * Path types to use when dynamically determining a path at runtime
  **/
@@ -76,6 +78,8 @@ typedef enum {
 	FU_PATH_KIND_POLKIT_ACTIONS,
 	FU_PATH_KIND_OFFLINE_TRIGGER,
 	FU_PATH_KIND_SYSFSDIR_SECURITY,
+	FU_PATH_KIND_EFIDBXDIR,
+	FU_PATH_KIND_ACPI_TABLES,
 	/*< private >*/
 	FU_PATH_KIND_LAST
 } FuPathKind;
@@ -92,6 +96,9 @@ gboolean	 fu_common_spawn_sync		(const gchar * const *argv,
 
 gchar		*fu_common_get_path		(FuPathKind	 path_kind);
 gchar		*fu_common_realpath		(const gchar	*filename,
+						 GError		**error);
+GPtrArray	*fu_common_filename_glob	(const gchar	*directory,
+						 const gchar	*pattern,
 						 GError		**error);
 gboolean	 fu_common_fnmatch		(const gchar	*pattern,
 						 const gchar	*str);
@@ -219,3 +226,4 @@ gchar		**fu_common_strnsplit		(const gchar	*str,
 						 const gchar	*delimiter,
 						 gint		 max_tokens);
 gboolean	 fu_common_kernel_locked_down	(void);
+gboolean	 fu_common_is_cpu_intel		(void);
