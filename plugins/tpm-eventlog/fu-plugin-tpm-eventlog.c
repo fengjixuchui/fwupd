@@ -15,6 +15,7 @@
 struct FuPluginData {
 	GPtrArray		*pcr0s;
 	gboolean		 secure_boot_problem;
+	gboolean		 has_device;
 	gboolean		 reconstructed;
 };
 
@@ -23,6 +24,7 @@ fu_plugin_init (FuPlugin *plugin)
 {
 	fu_plugin_alloc_data (plugin, sizeof (FuPluginData));
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_BEFORE, "uefi");
+	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_AFTER, "tpm");
 	fu_plugin_set_build_hash (plugin, FU_BUILD_HASH);
 }
 
@@ -86,15 +88,18 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 	return TRUE;
 }
 
-void
-fu_plugin_device_registered (FuPlugin *plugin, FuDevice *device)
+static void
+fu_plugin_device_registered_tpm (FuPlugin *plugin, FuDevice *device)
+{
+	FuPluginData *data = fu_plugin_get_data (plugin);
+	data->has_device = TRUE;
+}
+
+static void
+fu_plugin_device_registered_uefi (FuPlugin *plugin, FuDevice *device)
 {
 	FuPluginData *data = fu_plugin_get_data (plugin);
 	GPtrArray *checksums;
-
-	/* only care about UEFI devices from ESRT */
-	if (g_strcmp0 (fu_device_get_plugin (device), "uefi") != 0)
-		return;
 
 	/* only the system-firmware device gets checksums */
 	checksums = fu_device_get_checksums (device);
@@ -126,29 +131,48 @@ fu_plugin_device_registered (FuPlugin *plugin, FuDevice *device)
 }
 
 void
+fu_plugin_device_registered (FuPlugin *plugin, FuDevice *device)
+{
+	/* only care about UEFI devices from ESRT */
+	if (g_strcmp0 (fu_device_get_plugin (device), "uefi") == 0) {
+		fu_plugin_device_registered_uefi (plugin, device);
+		return;
+	}
+
+	/* detect the system TPM device */
+	if (g_strcmp0 (fu_device_get_plugin (device), "tpm") == 0) {
+		fu_plugin_device_registered_tpm (plugin, device);
+		return;
+	}
+}
+
+void
 fu_plugin_add_security_attrs (FuPlugin *plugin, FuSecurityAttrs *attrs)
 {
 	FuPluginData *data = fu_plugin_get_data (plugin);
 	g_autoptr(FwupdSecurityAttr) attr = NULL;
 
+	/* no TPM device */
+	if (!data->has_device)
+		return;
+
 	/* create attr */
-	attr = fwupd_security_attr_new ("org.trustedcomputinggroup.TpmEventLog");
+	attr = fwupd_security_attr_new (FWUPD_SECURITY_ATTR_ID_TPM_RECONSTRUCTION_PCR0);
 	fwupd_security_attr_set_plugin (attr, fu_plugin_get_name (plugin));
 	fwupd_security_attr_set_level (attr, FWUPD_SECURITY_ATTR_LEVEL_IMPORTANT);
-	fwupd_security_attr_set_name (attr, "TPM Reconstruction");
 	fu_security_attrs_append (attrs, attr);
 
 	/* check reconstructed to PCR0 */
 	if (!fu_plugin_get_enabled (plugin)) {
-		fwupd_security_attr_set_result (attr, "No binary bios measurements available");
+		fwupd_security_attr_set_result (attr, FWUPD_SECURITY_ATTR_RESULT_NOT_FOUND);
 		return;
 	}
 	if (!data->reconstructed) {
-		fwupd_security_attr_set_result (attr, "Did not match PCR0 reading");
+		fwupd_security_attr_set_result (attr, FWUPD_SECURITY_ATTR_RESULT_NOT_VALID);
 		return;
 	}
 
 	/* success */
 	fwupd_security_attr_add_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
-	fwupd_security_attr_set_result (attr, "Matched PCR0 reading");
+	fwupd_security_attr_set_result (attr, FWUPD_SECURITY_ATTR_RESULT_VALID);
 }
