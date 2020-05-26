@@ -29,13 +29,13 @@ fu_security_attr_get_name (FwupdSecurityAttr *attr)
 		/* TRANSLATORS: Title: DMA as in https://en.wikipedia.org/wiki/DMA_attack  */
 		return _("Pre-boot DMA protection");
 	}
-	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_AMT) == 0) {
-		/* TRANSLATORS: Title: AMT = Active Management Technology */
-		return _("Intel AMT");
-	}
 	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_CET) == 0) {
 		/* TRANSLATORS: Title: CET = Control-flow Enforcement Technology */
 		return _("Intel CET");
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_SMAP) == 0) {
+		/* TRANSLATORS: Title: SMAP = Supervisor Mode Access Prevention */
+		return _("Intel SMAP");
 	}
 	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_ENCRYPTED_RAM) == 0) {
 		/* TRANSLATORS: Title: Memory contents are encrypted, e.g. Intel TME */
@@ -112,7 +112,7 @@ fu_security_attr_get_result (FwupdSecurityAttr *attr)
 	}
 	if (result == FWUPD_SECURITY_ATTR_RESULT_NOT_VALID) {
 		/* TRANSLATORS: Suffix: the HSI result */
-		return _("Not Valid");
+		return _("Invalid");
 	}
 	if (result == FWUPD_SECURITY_ATTR_RESULT_ENABLED) {
 		/* TRANSLATORS: Suffix: the HSI result */

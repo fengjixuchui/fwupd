@@ -561,7 +561,16 @@ fu_engine_modify_remote (FuEngine *self,
 			 const gchar *value,
 			 GError **error)
 {
-	const gchar *keys[] = { "Enabled", "MetadataURI", "FirmwareBaseURI", "ReportURI", "AutomaticReports", NULL };
+	const gchar *keys[] = {
+		"AutomaticReports",
+		"AutomaticSecurityReports",
+		"Enabled",
+		"FirmwareBaseURI",
+		"MetadataURI",
+		"ReportURI",
+		"SecurityReportURI",
+		NULL,
+	};
 
 	/* check keys are valid */
 	if (!g_strv_contains (keys, key)) {
@@ -1342,14 +1351,102 @@ fu_engine_get_boot_time (void)
 	return NULL;
 }
 
-static GHashTable *
-fu_engine_get_report_metadata (FuEngine *self)
+static gboolean
+fu_engine_get_report_metadata_os_release (GHashTable *hash, GError **error)
 {
-	GHashTable *hash;
+	g_autoptr(GHashTable) os_release = NULL;
+	struct {
+		const gchar *key;
+		const gchar *val;
+	} distro_kv[] = {
+		{ "ID",			"DistroId" },
+		{ "VERSION_ID",		"DistroVersion" },
+		{ "VARIANT_ID",		"DistroVariant" },
+		{ NULL, NULL }
+	};
+
+	/* get all required os-release keys */
+	os_release = fwupd_get_os_release (error);
+	if (os_release == NULL)
+		return FALSE;
+	for (guint i = 0; distro_kv[i].key != NULL; i++) {
+		const gchar *tmp = g_hash_table_lookup (os_release, distro_kv[i].key);
+		if (tmp != NULL) {
+			g_hash_table_insert (hash,
+					     g_strdup (distro_kv[i].val),
+					     g_strdup (tmp));
+		}
+	}
+	return TRUE;
+}
+
+static gboolean
+fu_engine_get_report_metadata_kernel_cmdline (GHashTable *hash, GError **error)
+{
+	gsize bufsz = 0;
+	g_autofree gchar *buf = NULL;
+	const gchar *ignore[] = {
+		"",
+		"auto",
+		"BOOT_IMAGE",
+		"console",
+		"cryptdevice",
+		"initrd",
+		"LANG",
+		"loglevel",
+		"noplymouth",
+		"ostree",
+		"quiet",
+		"rd.luks.uuid",
+		"rd.lvm.lv",
+		"rd.md.uuid",
+		"resume",
+		"rhgb",
+		"ro",
+		"root",
+		"rootflags",
+		"rw",
+		"showopts",
+		"splash",
+		"swap",
+		"verbose",
+		"vt.handoff",
+		"zfs",
+		NULL, /* last entry */
+	};
+
+	/* get a PII-safe kernel command line */
+	if (!g_file_get_contents ("/proc/cmdline", &buf, &bufsz, error))
+		return FALSE;
+	if (bufsz > 0) {
+		g_auto(GStrv) tokens = fu_common_strnsplit (buf, bufsz - 1, " ", -1);
+		g_autoptr(GString) cmdline_safe = g_string_new (NULL);
+		for (guint i = 0; tokens[i] != NULL; i++) {
+			g_auto(GStrv) kv = g_strsplit (tokens[i], "=", 2);
+			if (g_strv_contains (ignore, kv[0]))
+				continue;
+			if (cmdline_safe->len > 0)
+				g_string_append (cmdline_safe, " ");
+			g_string_append (cmdline_safe, tokens[i]);
+		}
+		if (cmdline_safe->len > 0) {
+			g_hash_table_insert (hash,
+					     g_strdup ("KernelCmdline"),
+					     g_strdup (cmdline_safe->str));
+		}
+	}
+	return TRUE;
+}
+
+GHashTable *
+fu_engine_get_report_metadata (FuEngine *self, GError **error)
+{
+	const gchar *tmp;
 	gchar *btime;
 #ifdef HAVE_UTSNAME_H
 	struct utsname name_tmp;
 #endif
+	g_autoptr(GHashTable) hash = NULL;
 	g_autoptr(GList) compile_keys = g_hash_table_get_keys (self->compile_versions);
 	g_autoptr(GList) runtime_keys = g_hash_table_get_keys (self->runtime_versions);
 
@@ -1369,6 +1466,24 @@ fu_engine_get_report_metadata (FuEngine *self)
 				     g_strdup_printf ("RuntimeVersion(%s)", id),
 				     g_strdup (version));
 	}
+	if (!fu_engine_get_report_metadata_os_release (hash, error))
+		return NULL;
+	if (!fu_engine_get_report_metadata_kernel_cmdline (hash, error))
+		return NULL;
+
+	/* DMI data */
+	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_NAME);
+	if (tmp != NULL)
+		g_hash_table_insert (hash, g_strdup ("HostProduct"), g_strdup (tmp));
+	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_FAMILY);
+	if (tmp != NULL)
+		g_hash_table_insert (hash, g_strdup ("HostFamily"), g_strdup (tmp));
+	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_SKU);
+	if (tmp != NULL)
+		g_hash_table_insert (hash, g_strdup ("HostSku"), g_strdup (tmp));
+	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_MANUFACTURER);
+	if (tmp != NULL)
+		g_hash_table_insert (hash, g_strdup ("HostVendor"), g_strdup (tmp));
 
 	/* kernel version is often important for debugging failures */
 #ifdef HAVE_UTSNAME_H
@@ -1377,6 +1492,9 @@ fu_engine_get_report_metadata (FuEngine *self)
 		g_hash_table_insert (hash,
 				     g_strdup ("CpuArchitecture"),
 				     g_strdup (name_tmp.machine));
+		g_hash_table_insert (hash,
+				     g_strdup ("KernelVersion"),
+				     g_strdup (name_tmp.release));
 	}
 #endif
 
@@ -1385,7 +1503,7 @@ fu_engine_get_report_metadata (FuEngine *self)
 	if (btime != NULL)
 		g_hash_table_insert (hash, g_strdup ("BootTime"), btime);
 
-	return hash;
+	return g_steal_pointer (&hash);
 }
 
 /**
@@ -1530,18 +1648,13 @@ static FwupdRelease *
 fu_engine_create_release_metadata (FuEngine *self, FuPlugin *plugin, GError **error)
 {
 	GPtrArray *metadata_sources;
-	const gchar *tmp;
 	g_autoptr(FwupdRelease) release = fwupd_release_new ();
 	g_autoptr(GHashTable) metadata_hash = NULL;
-	g_autoptr(GHashTable) os_release = NULL;
-
-	/* add release data from os-release */
-	os_release = fwupd_get_os_release (error);
-	if (os_release == NULL)
-		return NULL;
 
 	/* build the version metadata */
-	metadata_hash = fu_engine_get_report_metadata (self);
+	metadata_hash = fu_engine_get_report_metadata (self, error);
+	if (metadata_hash == NULL)
+		return NULL;
 	fwupd_release_add_metadata (release, metadata_hash);
 	fwupd_release_add_metadata (release, fu_plugin_get_report_metadata (plugin));
 
@@ -1564,17 +1677,6 @@ fu_engine_create_release_metadata (FuEngine *self, FuPlugin *plugin, GError **er
 		fwupd_release_add_metadata (release,
 					    fu_plugin_get_report_metadata (plugin_tmp));
 	}
-
-	/* add details from os-release as metadata */
-	tmp = g_hash_table_lookup (os_release, "ID");
-	if (tmp != NULL)
-		fwupd_release_add_metadata_item (release, "DistroId", tmp);
-	tmp = g_hash_table_lookup (os_release, "VERSION_ID");
-	if (tmp != NULL)
-		fwupd_release_add_metadata_item (release, "DistroVersion", tmp);
-	tmp = g_hash_table_lookup (os_release, "VARIANT_ID");
-	if (tmp != NULL)
-		fwupd_release_add_metadata_item (release, "DistroVariant", tmp);
 	return g_steal_pointer (&release);
 }
 
@@ -3400,6 +3502,20 @@ fu_engine_get_result_from_component (FuEngine *self, XbNode *component, GError *
 	return g_steal_pointer (&dev);
 }
 
+static gint
+fu_engine_get_details_sort_cb (gconstpointer a, gconstpointer b)
+{
+	FuDevice *device1 = *((FuDevice **) a);
+	FuDevice *device2 = *((FuDevice **) b);
+	if (!fu_device_has_flag (device1, FWUPD_DEVICE_FLAG_UPDATABLE) &&
+	    fu_device_has_flag (device2, FWUPD_DEVICE_FLAG_UPDATABLE))
+		return 1;
+	if (fu_device_has_flag (device1, FWUPD_DEVICE_FLAG_UPDATABLE) &&
+	    !fu_device_has_flag (device2, FWUPD_DEVICE_FLAG_UPDATABLE))
+		return -1;
+	return 0;
+}
+
 /**
  * fu_engine_get_details:
  * @self: A #FuEngine
@@ -3472,8 +3588,34 @@ fu_engine_get_details (FuEngine *self, gint fd, GError **error)
 			fu_device_add_flag (dev, FWUPD_DEVICE_FLAG_SUPPORTED);
 		}
 		fu_engine_md_refresh_device_from_component (self, dev, component);
+
+		/* if this matched a device on the system, ensure all the
+		 * requirements passed before setting UPDATABLE */
+		if (fu_device_has_flag (dev, FWUPD_DEVICE_FLAG_UPDATABLE)) {
+			g_autoptr(FuInstallTask) task = fu_install_task_new (dev, component);
+			g_autoptr(GError) error_req = NULL;
+			if (!fu_engine_check_requirements (self, task,
+							   FWUPD_INSTALL_FLAG_OFFLINE |
+							   FWUPD_INSTALL_FLAG_ALLOW_REINSTALL |
+							   FWUPD_INSTALL_FLAG_ALLOW_OLDER,
+							   &error_req)) {
+				g_debug ("%s failed requirement checks: %s",
+					 fu_device_get_id (dev),
+					 error_req->message);
+				fu_device_remove_flag (dev, FWUPD_DEVICE_FLAG_UPDATABLE);
+			} else {
+				g_debug ("%s passed requirement checks",
+					 fu_device_get_id (dev));
+			}
+		}
+
 		g_ptr_array_add (details, dev);
 	}
+
+	/* order multiple devices so that the one that passes the requirement
+	 * is listed first */
+	g_ptr_array_sort (details, fu_engine_get_details_sort_cb);
+
 	return g_steal_pointer (&details);
 }
 
@@ -5024,9 +5166,12 @@ fu_engine_is_plugin_name_whitelisted (FuEngine *self, const gchar *name)
 void
 fu_engine_add_plugin_filter (FuEngine *self, const gchar *plugin_glob)
 {
+	GString *str;
 	g_return_if_fail (FU_IS_ENGINE (self));
 	g_return_if_fail (plugin_glob != NULL);
-	g_ptr_array_add (self->plugin_filter, g_strdup (plugin_glob));
+	str = g_string_new (plugin_glob);
+	fu_common_string_replace (str, "-", "_");
+	g_ptr_array_add (self->plugin_filter, g_string_free (str, FALSE));
 }
 
 static gboolean
