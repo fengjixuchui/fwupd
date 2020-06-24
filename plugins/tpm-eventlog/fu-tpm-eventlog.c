@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "fwupd-common-private.h"
 #include "fu-tpm-eventlog-parser.h"
 
 static gint
@@ -42,7 +43,6 @@ fu_tmp_eventlog_process (const gchar *fn, gint pcr, GError **error)
 	if (!g_file_get_contents (fn, (gchar **) &buf, &bufsz, error))
 		return FALSE;
 	items = fu_tpm_eventlog_parser_new (buf, bufsz,
-					    FU_TPM_EVENTLOG_PARSER_FLAG_ALL_ALGS |
 					    FU_TPM_EVENTLOG_PARSER_FLAG_ALL_PCRS,
 					    error);
 	if (items == NULL)
@@ -71,10 +71,12 @@ fu_tmp_eventlog_process (const gchar *fn, gint pcr, GError **error)
 		for (guint j = 0; j < pcrs->len; j++) {
 			const gchar *csum = g_ptr_array_index (pcrs, j);
 			g_autofree gchar *title = NULL;
+			g_autofree gchar *pretty = NULL;
 			if (pcr >= 0 && i != (guint) pcr)
 				continue;
-			title = g_strdup_printf ("%x", i);
-			fu_common_string_append_kv (str, 1, title, csum);
+			title = g_strdup_printf ("PCR %x", i);
+			pretty = fwupd_checksum_format_for_display (csum);
+			fu_common_string_append_kv (str, 1, title, pretty);
 		}
 	}
 

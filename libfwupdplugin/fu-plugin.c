@@ -50,9 +50,9 @@ typedef struct {
 	GPtrArray		*udev_subsystems;
 	FuSmbios		*smbios;
 	GType			 device_gtype;
-	GHashTable		*devices;	/* platform_id:GObject */
+	GHashTable		*devices;		/* (nullable): platform_id:GObject */
 	GRWLock			 devices_mutex;
-	GHashTable		*report_metadata;	/* key:value */
+	GHashTable		*report_metadata;	/* (nullable): key:value */
 	FuPluginData		*data;
 } FuPluginPrivate;
 
@@ -219,6 +219,8 @@ fu_plugin_cache_lookup (FuPlugin *self, const gchar *id)
 	g_return_val_if_fail (FU_IS_PLUGIN (self), NULL);
 	g_return_val_if_fail (id != NULL, NULL);
 	g_return_val_if_fail (locker != NULL, NULL);
+	if (priv->devices == NULL)
+		return NULL;
 	return g_hash_table_lookup (priv->devices, id);
 }
 
@@ -240,6 +242,12 @@ fu_plugin_cache_add (FuPlugin *self, const gchar *id, gpointer dev)
 	g_return_if_fail (FU_IS_PLUGIN (self));
 	g_return_if_fail (id != NULL);
 	g_return_if_fail (locker != NULL);
+	if (priv->devices == NULL) {
+		priv->devices = g_hash_table_new_full (g_str_hash,
+						       g_str_equal,
+						       g_free,
+						       (GDestroyNotify) g_object_unref);
+	}
 	g_hash_table_insert (priv->devices, g_strdup (id), g_object_ref (dev));
 }
 
@@ -260,6 +268,8 @@ fu_plugin_cache_remove (FuPlugin *self, const gchar *id)
 	g_return_if_fail (FU_IS_PLUGIN (self));
 	g_return_if_fail (id != NULL);
 	g_return_if_fail (locker != NULL);
+	if (priv->devices == NULL)
+		return;
 	g_hash_table_remove (priv->devices, id);
 }
 
@@ -1640,6 +1650,8 @@ void
 fu_plugin_add_udev_subsystem (FuPlugin *self, const gchar *subsystem)
 {
 	FuPluginPrivate *priv = GET_PRIVATE (self);
+	if (priv->udev_subsystems == NULL)
+		priv->udev_subsystems = g_ptr_array_new_with_free_func (g_free);
 	for (guint i = 0; i < priv->udev_subsystems->len; i++) {
 		const gchar *subsystem_tmp = g_ptr_array_index (priv->udev_subsystems, i);
 		if (g_strcmp0 (subsystem_tmp, subsystem) == 0)
@@ -2498,6 +2510,8 @@ void
 fu_plugin_add_rule (FuPlugin *self, FuPluginRule rule, const gchar *name)
 {
 	FuPluginPrivate *priv = fu_plugin_get_instance_private (self);
+	if (priv->rules[rule] == NULL)
+		priv->rules[rule] = g_ptr_array_new_with_free_func (g_free);
 	g_ptr_array_add (priv->rules[rule], g_strdup (name));
 	g_signal_emit (self, signals[SIGNAL_RULES_CHANGED], 0);
 }
@@ -2509,7 +2523,7 @@ fu_plugin_add_rule (FuPlugin *self, FuPluginRule rule, const gchar *name)
  *
  * Gets the plugin IDs that should be run after this plugin.
  *
- * Returns: (element-type utf8) (transfer none): the list of plugin names, e.g. ['appstream']
+ * Returns: (element-type utf8) (transfer none) (nullable): the list of plugin names, e.g. ['appstream']
  *
  * Since: 1.0.0
  **/
@@ -2537,6 +2551,8 @@ gboolean
 fu_plugin_has_rule (FuPlugin *self, FuPluginRule rule, const gchar *name)
 {
 	FuPluginPrivate *priv = fu_plugin_get_instance_private (self);
+	if (priv->rules[rule] == NULL)
+		return FALSE;
 	for (guint i = 0; i < priv->rules[rule]->len; i++) {
 		const gchar *tmp = g_ptr_array_index (priv->rules[rule], i);
 		if (g_strcmp0 (tmp, name) == 0)
@@ -2563,6 +2579,12 @@ void
 fu_plugin_add_report_metadata (FuPlugin *self, const gchar *key, const gchar *value)
 {
 	FuPluginPrivate *priv = fu_plugin_get_instance_private (self);
+	if (priv->report_metadata == NULL) {
+		priv->report_metadata = g_hash_table_new_full (g_str_hash,
+							       g_str_equal,
+							       g_free,
+							       g_free);
+	}
 	g_hash_table_insert (priv->report_metadata, g_strdup (key), g_strdup (value));
 }
 
@@ -2572,7 +2594,7 @@ fu_plugin_add_report_metadata (FuPlugin *self, const gchar *key, const gchar *va
  *
  * Returns the list of additional metadata to be added when filing a report.
  *
- * Returns: (transfer none): the map of report metadata
+ * Returns: (transfer none) (nullable): the map of report metadata
  *
  * Since: 1.0.4
  **/
@@ -2742,13 +2764,7 @@ fu_plugin_init (FuPlugin *self)
 {
 	FuPluginPrivate *priv = GET_PRIVATE (self);
 	priv->enabled = TRUE;
-	priv->udev_subsystems = g_ptr_array_new_with_free_func (g_free);
-	priv->devices = g_hash_table_new_full (g_str_hash, g_str_equal,
-					       g_free, (GDestroyNotify) g_object_unref);
 	g_rw_lock_init (&priv->devices_mutex);
-	priv->report_metadata = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
-	for (guint i = 0; i < FU_PLUGIN_RULE_LAST; i++)
-		priv->rules[i] = g_ptr_array_new_with_free_func (g_free);
 }
 
 static void
@@ -2757,6 +2773,8 @@ fu_plugin_finalize (GObject *object)
 	FuPlugin *self = FU_PLUGIN (object);
 	FuPluginPrivate *priv = GET_PRIVATE (self);
 	FuPluginInitFunc func = NULL;
+
+	g_rw_lock_clear (&priv->devices_mutex);
 
 	/* optional */
 	if (priv->module != NULL) {
@@ -2767,9 +2785,10 @@ fu_plugin_finalize (GObject *object)
 		}
 	}
 
-	for (guint i = 0; i < FU_PLUGIN_RULE_LAST; i++)
-		g_ptr_array_unref (priv->rules[i]);
-
+	for (guint i = 0; i < FU_PLUGIN_RULE_LAST; i++) {
+		if (priv->rules[i] != NULL)
+			g_ptr_array_unref (priv->rules[i]);
+	}
 	if (priv->usb_ctx != NULL)
 		g_object_unref (priv->usb_ctx);
 	if (priv->hwids != NULL)
@@ -2784,9 +2803,10 @@ fu_plugin_finalize (GObject *object)
 		g_hash_table_unref (priv->runtime_versions);
 	if (priv->compile_versions != NULL)
 		g_hash_table_unref (priv->compile_versions);
-	g_hash_table_unref (priv->devices);
-	g_hash_table_unref (priv->report_metadata);
-	g_rw_lock_clear (&priv->devices_mutex);
+	if (priv->report_metadata != NULL)
+		g_hash_table_unref (priv->report_metadata);
+	if (priv->devices != NULL)
+		g_hash_table_unref (priv->devices);
 	g_free (priv->build_hash);
 	g_free (priv->name);
 	g_free (priv->data);

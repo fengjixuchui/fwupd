@@ -41,7 +41,7 @@ typedef struct {
 	FuDevice			*parent;	/* noref */
 	FuDevice			*proxy;		/* noref */
 	FuQuirks			*quirks;
-	GHashTable			*metadata;
+	GHashTable			*metadata;	/* (nullable) */
 	GRWLock				 metadata_mutex;
 	GPtrArray			*parent_guids;
 	GRWLock				 parent_guids_mutex;
@@ -770,6 +770,17 @@ fu_device_add_child (FuDevice *self, FuDevice *child)
 	}
 	g_ptr_array_add (priv->children, g_object_ref (child));
 
+	/* ensure the parent has the MAX() of the childrens removal delay  */
+	for (guint i = 0; i < priv->children->len; i++) {
+		FuDevice *child_tmp = g_ptr_array_index (priv->children, i);
+		guint remove_delay = fu_device_get_remove_delay (child_tmp);
+		if (remove_delay > priv->remove_delay) {
+			g_debug ("setting remove delay to %u as child is greater than %u",
+				 remove_delay, priv->remove_delay);
+			priv->remove_delay = remove_delay;
+		}
+	}
+
 	/* copy from main device if unset */
 	if (fu_device_get_physical_id (child) == NULL &&
 	    fu_device_get_physical_id (self) != NULL)
@@ -1394,6 +1405,8 @@ fu_device_get_metadata (FuDevice *self, const gchar *key)
 	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
 	g_return_val_if_fail (key != NULL, NULL);
 	g_return_val_if_fail (locker != NULL, NULL);
+	if (priv->metadata == NULL)
+		return NULL;
 	return g_hash_table_lookup (priv->metadata, key);
 }
 
@@ -1419,6 +1432,8 @@ fu_device_get_metadata_boolean (FuDevice *self, const gchar *key)
 	g_return_val_if_fail (key != NULL, FALSE);
 	g_return_val_if_fail (locker != NULL, FALSE);
 
+	if (priv->metadata == NULL)
+		return FALSE;
 	tmp = g_hash_table_lookup (priv->metadata, key);
 	if (tmp == NULL)
 		return FALSE;
@@ -1449,6 +1464,8 @@ fu_device_get_metadata_integer (FuDevice *self, const gchar *key)
 	g_return_val_if_fail (key != NULL, G_MAXUINT);
 	g_return_val_if_fail (locker != NULL, G_MAXUINT);
 
+	if (priv->metadata == NULL)
+		return G_MAXUINT;
 	tmp = g_hash_table_lookup (priv->metadata, key);
 	if (tmp == NULL)
 		return G_MAXUINT;
@@ -1477,6 +1494,8 @@ fu_device_remove_metadata (FuDevice *self, const gchar *key)
 	g_return_if_fail (FU_IS_DEVICE (self));
 	g_return_if_fail (key != NULL);
 	g_return_if_fail (locker != NULL);
+	if (priv->metadata == NULL)
+		return;
 	g_hash_table_remove (priv->metadata, key);
 }
 
@@ -1499,6 +1518,10 @@ fu_device_set_metadata (FuDevice *self, const gchar *key, const gchar *value)
 	g_return_if_fail (key != NULL);
 	g_return_if_fail (value != NULL);
 	g_return_if_fail (locker != NULL);
+	if (priv->metadata == NULL) {
+		priv->metadata = g_hash_table_new_full (g_str_hash, g_str_equal,
+							g_free, g_free);
+	}
 	g_hash_table_insert (priv->metadata, g_strdup (key), g_strdup (value));
 }
 
@@ -2242,7 +2265,6 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 	FuDeviceClass *klass = FU_DEVICE_GET_CLASS (self);
 	FuDevicePrivate *priv = GET_PRIVATE (self);
 	g_autofree gchar *tmp = NULL;
-	g_autoptr(GList) keys = NULL;
 	g_autoptr(GRWLockReaderLocker) locker = g_rw_lock_reader_locker_new (&priv->metadata_mutex);
 
 	g_return_if_fail (locker != NULL);
@@ -2277,11 +2299,13 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 		fu_common_string_append_ku (str, idt + 1, "Order", priv->order);
 	if (priv->priority > 0)
 		fu_common_string_append_ku (str, idt + 1, "Priority", priv->priority);
-	keys = g_hash_table_get_keys (priv->metadata);
-	for (GList *l = keys; l != NULL; l = l->next) {
-		const gchar *key = l->data;
-		const gchar *value = g_hash_table_lookup (priv->metadata, key);
-		fu_common_string_append_kv (str, idt + 1, key, value);
+	if (priv->metadata != NULL) {
+		g_autoptr(GList) keys = g_hash_table_get_keys (priv->metadata);
+		for (GList *l = keys; l != NULL; l = l->next) {
+			const gchar *key = l->data;
+			const gchar *value = g_hash_table_lookup (priv->metadata, key);
+			fu_common_string_append_kv (str, idt + 1, key, value);
+		}
 	}
 
 	/* subclassed */
@@ -2973,6 +2997,62 @@ fu_device_probe_invalidate (FuDevice *self)
 }
 
 /**
+ * fu_device_report_metadata_pre:
+ * @self: A #FuDevice
+ *
+ * Collects metadata that would be useful for debugging a failed update report.
+ *
+ * Returns: (transfer full) (nullable): A #GHashTable, or %NULL if there is no data
+ *
+ * Since: 1.5.0
+ **/
+GHashTable *
+fu_device_report_metadata_pre (FuDevice *self)
+{
+	FuDeviceClass *klass = FU_DEVICE_GET_CLASS (self);
+	g_autoptr(GHashTable) metadata = NULL;
+
+	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
+
+	/* not implemented */
+	if (klass->report_metadata_pre == NULL)
+		return NULL;
+
+	/* metadata for all devices */
+	metadata = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+	klass->report_metadata_pre (self, metadata);
+	return g_steal_pointer (&metadata);
+}
+
+/**
+ * fu_device_report_metadata_post:
+ * @self: A #FuDevice
+ *
+ * Collects metadata that would be useful for debugging a failed update report.
+ *
+ * Returns: (transfer full) (nullable): A #GHashTable, or %NULL if there is no data
+ *
+ * Since: 1.5.0
+ **/
+GHashTable *
+fu_device_report_metadata_post (FuDevice *self)
+{
+	FuDeviceClass *klass = FU_DEVICE_GET_CLASS (self);
+	g_autoptr(GHashTable) metadata = NULL;
+
+	g_return_val_if_fail (FU_IS_DEVICE (self), NULL);
+
+	/* not implemented */
+	if (klass->report_metadata_post == NULL)
+		return NULL;
+
+	/* metadata for all devices */
+	metadata = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+	klass->report_metadata_post (self, metadata);
+	return g_steal_pointer (&metadata);
+}
+
+/**
  * fu_device_incorporate:
  * @self: A #FuDevice
  * @donor: Another #FuDevice
@@ -2989,7 +3069,6 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 	FuDevicePrivate *priv_donor = GET_PRIVATE (donor);
 	GPtrArray *instance_ids = fu_device_get_instance_ids (donor);
 	GPtrArray *parent_guids = fu_device_get_parent_guids (donor);
-	g_autoptr(GList) metadata_keys = NULL;
 
 	g_return_if_fail (FU_IS_DEVICE (self));
 	g_return_if_fail (FU_IS_DEVICE (donor));
@@ -3014,12 +3093,14 @@ fu_device_incorporate (FuDevice *self, FuDevice *donor)
 		fu_device_add_parent_guid (self, g_ptr_array_index (parent_guids, i));
 	g_rw_lock_reader_unlock (&priv_donor->parent_guids_mutex);
 	g_rw_lock_reader_lock (&priv_donor->metadata_mutex);
-	metadata_keys = g_hash_table_get_keys (priv_donor->metadata);
-	for (GList *l = metadata_keys; l != NULL; l = l->next) {
-		const gchar *key = l->data;
-		if (g_hash_table_lookup (priv->metadata, key) == NULL) {
-			const gchar *value = g_hash_table_lookup (priv_donor->metadata, key);
-			fu_device_set_metadata (self, key, value);
+	if (priv->metadata != NULL) {
+		g_autoptr(GList) keys = g_hash_table_get_keys (priv_donor->metadata);
+		for (GList *l = keys; l != NULL; l = l->next) {
+			const gchar *key = l->data;
+			if (g_hash_table_lookup (priv->metadata, key) == NULL) {
+				const gchar *value = g_hash_table_lookup (priv_donor->metadata, key);
+				fu_device_set_metadata (self, key, value);
+			}
 		}
 	}
 	g_rw_lock_reader_unlock (&priv_donor->metadata_mutex);
@@ -3140,8 +3221,6 @@ fu_device_init (FuDevice *self)
 	priv->possible_plugins = g_ptr_array_new_with_free_func (g_free);
 	priv->retry_recs = g_ptr_array_new_with_free_func (g_free);
 	g_rw_lock_init (&priv->parent_guids_mutex);
-	priv->metadata = g_hash_table_new_full (g_str_hash, g_str_equal,
-						g_free, g_free);
 	g_rw_lock_init (&priv->metadata_mutex);
 }
 
@@ -3150,6 +3229,9 @@ fu_device_finalize (GObject *object)
 {
 	FuDevice *self = FU_DEVICE (object);
 	FuDevicePrivate *priv = GET_PRIVATE (self);
+
+	g_rw_lock_clear (&priv->metadata_mutex);
+	g_rw_lock_clear (&priv->parent_guids_mutex);
 
 	if (priv->alternate != NULL)
 		g_object_unref (priv->alternate);
@@ -3161,9 +3243,8 @@ fu_device_finalize (GObject *object)
 		g_object_unref (priv->quirks);
 	if (priv->poll_id != 0)
 		g_source_remove (priv->poll_id);
-	g_rw_lock_clear (&priv->metadata_mutex);
-	g_rw_lock_clear (&priv->parent_guids_mutex);
-	g_hash_table_unref (priv->metadata);
+	if (priv->metadata != NULL)
+		g_hash_table_unref (priv->metadata);
 	g_ptr_array_unref (priv->children);
 	g_ptr_array_unref (priv->parent_guids);
 	g_ptr_array_unref (priv->possible_plugins);

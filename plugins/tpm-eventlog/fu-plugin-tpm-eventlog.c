@@ -15,7 +15,8 @@
 struct FuPluginData {
 	GPtrArray		*pcr0s;
 	gboolean		 secure_boot_problem;
-	gboolean		 has_device;
+	gboolean		 has_tpm_device;
+	gboolean		 has_uefi_device;
 	gboolean		 reconstructed;
 };
 
@@ -55,9 +56,6 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 		g_propagate_error (error, g_steal_pointer (&error_local));
 		return FALSE;
 	}
-
-	if (!g_file_get_contents (fn, (gchar **) &buf, &bufsz, error))
-		return FALSE;
 	if (bufsz == 0) {
 		g_set_error (error,
 			     FWUPD_ERROR,
@@ -92,7 +90,7 @@ static void
 fu_plugin_device_registered_tpm (FuPlugin *plugin, FuDevice *device)
 {
 	FuPluginData *data = fu_plugin_get_data (plugin);
-	data->has_device = TRUE;
+	data->has_tpm_device = TRUE;
 }
 
 static void
@@ -105,6 +103,7 @@ fu_plugin_device_registered_uefi (FuPlugin *plugin, FuDevice *device)
 	checksums = fu_device_get_checksums (device);
 	if (checksums->len == 0)
 		return;
+	data->has_uefi_device = TRUE;
 
 	if (data->secure_boot_problem) {
 		fu_device_set_update_message (device,
@@ -115,19 +114,25 @@ fu_plugin_device_registered_uefi (FuPlugin *plugin, FuDevice *device)
 
 	for (guint i = 0; i < checksums->len; i++) {
 		const gchar *checksum = g_ptr_array_index (checksums, i);
+		data->reconstructed = FALSE;
 		for (guint j = 0; j < data->pcr0s->len; j++) {
 			const gchar *checksum_tmp = g_ptr_array_index (data->pcr0s, j);
+			/* skip unless same algorithm */
+			if (strlen (checksum) != strlen (checksum_tmp))
+				continue;
 			if (g_strcmp0 (checksum, checksum_tmp) == 0) {
 				data->reconstructed = TRUE;
-				return;
+				break;
 			}
 		}
+		/* check at least one reconstruction for this algorithm */
+		if (!data->reconstructed) {
+			fu_device_set_update_message (device,
+						     "TPM PCR0 differs from reconstruction, "
+						     "please see https://github.com/fwupd/fwupd/wiki/TPM-PCR0-differs-from-reconstruction");
+			return;
+		}
 	}
-
-	/* urgh, this is unexpected */
-	fu_device_set_update_message (device,
-				     "TPM PCR0 differs from reconstruction, "
-				     "please see https://github.com/fwupd/fwupd/wiki/TPM-PCR0-differs-from-reconstruction");
 }
 
 void
@@ -153,7 +158,7 @@ fu_plugin_add_security_attrs (FuPlugin *plugin, FuSecurityAttrs *attrs)
 	g_autoptr(FwupdSecurityAttr) attr = NULL;
 
 	/* no TPM device */
-	if (!data->has_device)
+	if (!data->has_tpm_device)
 		return;
 
 	/* create attr */
@@ -163,7 +168,7 @@ fu_plugin_add_security_attrs (FuPlugin *plugin, FuSecurityAttrs *attrs)
 	fu_security_attrs_append (attrs, attr);
 
 	/* check reconstructed to PCR0 */
-	if (!fu_plugin_get_enabled (plugin)) {
+	if (!fu_plugin_get_enabled (plugin) || !data->has_uefi_device) {
 		fwupd_security_attr_set_result (attr, FWUPD_SECURITY_ATTR_RESULT_NOT_FOUND);
 		return;
 	}

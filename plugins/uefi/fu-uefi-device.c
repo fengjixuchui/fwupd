@@ -116,6 +116,36 @@ fu_uefi_device_to_string (FuDevice *device, guint idt, GString *str)
 				    fu_device_get_metadata_boolean (device, "RequireShimForSecureBoot"));
 }
 
+static void
+fu_uefi_device_report_metadata_pre (FuDevice *device, GHashTable *metadata)
+{
+	FuUefiDevice *self = FU_UEFI_DEVICE (device);
+
+	/* record if we had an invalid header during update */
+	g_hash_table_insert (metadata,
+			     g_strdup ("MissingCapsuleHeader"),
+			     g_strdup (self->missing_header ? "True" : "False"));
+
+	/* where the ESP was mounted during installation */
+	g_hash_table_insert (metadata,
+			     g_strdup ("EspPath"),
+			     g_strdup (fu_device_get_metadata (device, "EspPath")));
+}
+
+static void
+fu_uefi_device_report_metadata_post (FuDevice *device, GHashTable *metadata)
+{
+	FuUefiDevice *self = FU_UEFI_DEVICE (device);
+
+	/* the actual last_attempt values */
+	g_hash_table_insert (metadata,
+			     g_strdup ("LastAttemptStatus"),
+			     g_strdup_printf ("0x%x", self->last_attempt_status));
+	g_hash_table_insert (metadata,
+			     g_strdup ("LastAttemptVersion"),
+			     g_strdup_printf ("0x%x", self->last_attempt_version));
+}
+
 FuUefiDeviceKind
 fu_uefi_device_get_kind (FuUefiDevice *self)
 {
@@ -344,13 +374,6 @@ fu_uefi_device_fixup_firmware (FuDevice *device, GBytes *fw, GError **error)
 }
 
 gboolean
-fu_uefi_missing_capsule_header (FuDevice *device)
-{
-	FuUefiDevice *self = FU_UEFI_DEVICE (device);
-	return self->missing_header;
-}
-
-gboolean
 fu_uefi_device_write_update_info (FuUefiDevice *self,
 				  const gchar *filename,
 				  const gchar *varname,
@@ -515,9 +538,9 @@ fu_uefi_device_prepare (FuDevice *device,
 	/* sanity checks */
 	if (!fu_uefi_device_is_esp_mounted (device, error))
 		return FALSE;
-	if (!fu_uefi_device_check_esp_free (device, error))
-		return FALSE;
 	if (!fu_uefi_device_cleanup_esp (device, error))
+		return FALSE;
+	if (!fu_uefi_device_check_esp_free (device, error))
 		return FALSE;
 
 	return TRUE;
@@ -758,6 +781,8 @@ fu_uefi_device_class_init (FuUefiDeviceClass *klass)
 	klass_device->prepare = fu_uefi_device_prepare;
 	klass_device->write_firmware = fu_uefi_device_write_firmware;
 	klass_device->cleanup = fu_uefi_device_cleanup;
+	klass_device->report_metadata_pre = fu_uefi_device_report_metadata_pre;
+	klass_device->report_metadata_post = fu_uefi_device_report_metadata_post;
 }
 
 FuUefiDevice *

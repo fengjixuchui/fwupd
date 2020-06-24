@@ -678,15 +678,9 @@ fu_util_report_history_for_remote (FuUtilPrivate *priv,
 				GPtrArray *devices,
 				GError **error)
 {
-	JsonNode *json_root;
-	JsonObject *json_object;
-	const gchar *server_msg = NULL;
-	guint status_code;
-	const gchar *report_uri;
 	g_autofree gchar *data = NULL;
 	g_autofree gchar *sig = NULL;
-	g_autoptr(JsonParser) json_parser = NULL;
-	g_autoptr(SoupMessage) msg = NULL;
+	g_autofree gchar *uri = NULL;
 	g_autoptr(FwupdRemote) remote = NULL;
 
 	/* convert to JSON */
@@ -707,11 +701,10 @@ fu_util_report_history_for_remote (FuUtilPrivate *priv,
 						NULL, error);
 	if (remote == NULL)
 		return FALSE;
-	report_uri = fwupd_remote_get_report_uri (remote);
 
 	/* ask for permission */
 	if (!priv->assume_yes && !fwupd_remote_get_automatic_reports (remote)) {
-		fu_util_print_data (_("Target"), report_uri);
+		fu_util_print_data (_("Target"), fwupd_remote_get_report_uri (remote));
 		fu_util_print_data (_("Payload"), data);
 		if (sig != NULL)
 			fu_util_print_data (_("Signature"), sig);
@@ -725,108 +718,27 @@ fu_util_report_history_for_remote (FuUtilPrivate *priv,
 		}
 	}
 
-	/* POST request */
-	if (sig != NULL) {
-		g_autoptr(SoupMultipart) mp = NULL;
-		mp = soup_multipart_new (SOUP_FORM_MIME_TYPE_MULTIPART);
-		soup_multipart_append_form_string (mp, "payload", data);
-		soup_multipart_append_form_string (mp, "signature", sig);
-		msg = soup_form_request_new_from_multipart (report_uri, mp);
-	} else {
-		msg = soup_message_new (SOUP_METHOD_POST, report_uri);
-		soup_message_set_request (msg, "application/json; charset=utf-8",
-					  SOUP_MEMORY_COPY, data, strlen (data));
-	}
-	status_code = soup_session_send_message (priv->soup_session, msg);
-	g_debug ("server returned: %s", msg->response_body->data);
-
-	/* server returned nothing, and probably exploded in a ball of flames */
-	if (msg->response_body->length == 0) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_INVALID_FILE,
-			     "Failed to upload to %s: %s",
-			     report_uri, soup_status_get_phrase (status_code));
+	/* POST request and parse reply */
+	if (!fu_util_send_report (priv->soup_session,
+				  fwupd_remote_get_report_uri (remote),
+				  data, sig, &uri, error))
 		return FALSE;
+
+	/* server wanted us to see a message */
+	if (uri != NULL) {
+		g_print ("%s %s\n",
+			 /* TRANSLATORS: the server sent the user a small message */
+			 _("Update failure is a known issue, visit this URL for more information:"),
+			 uri);
 	}
 
-	/* parse JSON reply */
-	json_parser = json_parser_new ();
-	if (!json_parser_load_from_data (json_parser,
-					 msg->response_body->data,
-					 msg->response_body->length,
-					 error)) {
-		g_autofree gchar *str = g_strndup (msg->response_body->data,
-						   msg->response_body->length);
-		g_prefix_error (error, "Failed to parse JSON response from '%s': ", str);
-		return FALSE;
-	}
-	json_root = json_parser_get_root (json_parser);
-	if (json_root == NULL) {
-		g_autofree gchar *str = g_strndup (msg->response_body->data,
-						   msg->response_body->length);
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_PERMISSION_DENIED,
-			     "JSON response was malformed: '%s'", str);
-		return FALSE;
-	}
-	json_object = json_node_get_object (json_root);
-	if (json_object == NULL) {
-		g_autofree gchar *str = g_strndup (msg->response_body->data,
-						   msg->response_body->length);
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_PERMISSION_DENIED,
-			     "JSON response object was malformed: '%s'", str);
-		return FALSE;
-	}
-
-	/* get any optional server message */
-	if (json_object_has_member (json_object, "msg"))
-		server_msg = json_object_get_string_member (json_object, "msg");
-
-	/* server reported failed */
-	if (!json_object_get_boolean_member (json_object, "success")) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_PERMISSION_DENIED,
-			     "Server rejected report: %s",
-			     server_msg != NULL ? server_msg : "unspecified");
-		return FALSE;
-	}
-
-	/* server wanted us to see the message */
-	if (server_msg != NULL) {
-		if (g_strstr_len (server_msg, -1, "known issue") != NULL &&
-		    json_object_has_member (json_object, "uri")) {
-			g_print ("%s %s\n",
-				 /* TRANSLATORS: the server sent the user a small message */
-				 _("Update failure is a known issue, visit this URL for more information:"),
-				 json_object_get_string_member (json_object, "uri"));
-		} else {
-			/* TRANSLATORS: the server sent the user a small message */
-			g_print ("%s %s\n", _("Upload message:"), server_msg);
-		}
-	}
-
-	/* fall back to HTTP status codes in case the server is offline */
-	if (!SOUP_STATUS_IS_SUCCESSFUL (status_code)) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_INVALID_FILE,
-			     "Failed to upload to %s: %s",
-			     report_uri, soup_status_get_phrase (status_code));
-		return FALSE;
-	}
-
+	/* success */
 	return TRUE;
 }
 
 static gboolean
 fu_util_report_history (FuUtilPrivate *priv, gchar **values, GError **error)
 {
-	g_autoptr(GHashTable) remote_id_uri_map = NULL;
 	g_autoptr(GHashTable) report_map = NULL;
 	g_autoptr(GList) ids = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
@@ -840,25 +752,6 @@ fu_util_report_history (FuUtilPrivate *priv, gchar **values, GError **error)
 			return FALSE;
 	}
 
-	/* create a map of RemoteID to RemoteURI */
-	remotes = fwupd_client_get_remotes (priv->client, NULL, error);
-	if (remotes == NULL)
-		return FALSE;
-	remote_id_uri_map = g_hash_table_new (g_str_hash, g_str_equal);
-	for (guint i = 0; i < remotes->len; i++) {
-		FwupdRemote *remote = g_ptr_array_index (remotes, i);
-		if (fwupd_remote_get_id (remote) == NULL)
-			continue;
-		if (fwupd_remote_get_report_uri (remote) == NULL)
-			continue;
-		g_debug ("adding %s for %s",
-			 fwupd_remote_get_report_uri (remote),
-			 fwupd_remote_get_id (remote));
-		g_hash_table_insert (remote_id_uri_map,
-				     (gpointer) fwupd_remote_get_id (remote),
-				     (gpointer) fwupd_remote_get_report_uri (remote));
-	}
-
 	/* get all devices from the history database, then filter them,
 	 * adding to a hash map of report-ids */
 	devices = fwupd_client_get_history (priv->client, NULL, error);
@@ -870,8 +763,8 @@ fu_util_report_history (FuUtilPrivate *priv, gchar **values, GError **error)
 		FwupdDevice *dev = g_ptr_array_index (devices, i);
 		FwupdRelease *rel = fwupd_device_get_release_default (dev);
 		const gchar *remote_id;
-		const gchar *remote_uri;
 		GPtrArray *devices_tmp;
+		g_autoptr(FwupdRemote) remote = NULL;
 
 		/* filter, if not forcing */
 		if (!fu_util_filter_device (priv, dev))
@@ -897,9 +790,12 @@ fu_util_report_history (FuUtilPrivate *priv, gchar **values, GError **error)
 			g_debug ("%s has no RemoteID", fwupd_device_get_id (dev));
 			continue;
 		}
-		remote_uri = g_hash_table_lookup (remote_id_uri_map, remote_id);
-		if (remote_uri == NULL) {
-			g_debug ("%s has no RemoteURI", remote_id);
+		remote = fwupd_client_get_remote_by_id (priv->client, remote_id,
+							NULL, error);
+		if (remote == NULL)
+			return FALSE;
+		if (fwupd_remote_get_report_uri (remote) == NULL) {
+			g_debug ("%s has no RemoteURI", fwupd_remote_get_report_uri (remote));
 			continue;
 		}
 
@@ -929,21 +825,17 @@ fu_util_report_history (FuUtilPrivate *priv, gchar **values, GError **error)
 		GPtrArray *devices_tmp = g_hash_table_lookup (report_map, id);
 		if (!fu_util_report_history_for_remote (priv, id, devices_tmp, error))
 			return FALSE;
-	}
 
-	/* mark each device as reported */
-	for (guint i = 0; i < devices->len; i++) {
-		FwupdDevice *dev = g_ptr_array_index (devices, i);
-		if (fwupd_device_has_flag (dev, FWUPD_DEVICE_FLAG_REPORTED))
-			continue;
-		if (!fwupd_device_has_flag (dev, FWUPD_DEVICE_FLAG_SUPPORTED))
-			continue;
-		g_debug ("setting flag on %s", fwupd_device_get_id (dev));
-		if (!fwupd_client_modify_device (priv->client,
-						 fwupd_device_get_id (dev),
-						 "Flags", "reported",
-						 NULL, error))
-			return FALSE;
+		/* mark each device as reported */
+		for (guint i = 0; i < devices_tmp->len; i++) {
+			FwupdDevice *dev = g_ptr_array_index (devices_tmp, i);
+			g_debug ("setting flag on %s", fwupd_device_get_id (dev));
+			if (!fwupd_client_modify_device (priv->client,
+							 fwupd_device_get_id (dev),
+							 "Flags", "reported",
+							 NULL, error))
+				return FALSE;
+		}
 	}
 
 	/* TRANSLATORS: success message -- where the user has uploaded
@@ -1352,6 +1244,7 @@ static gboolean
 fu_util_check_oldest_remote (FuUtilPrivate *priv, guint64 *age_oldest, GError **error)
 {
 	g_autoptr(GPtrArray) remotes = NULL;
+	gboolean checked = FALSE;
 
 	/* get the age of the oldest enabled remotes */
 	remotes = fwupd_client_get_remotes (priv->client, NULL, error);
@@ -1363,8 +1256,17 @@ fu_util_check_oldest_remote (FuUtilPrivate *priv, guint64 *age_oldest, GError **
 			continue;
 		if (fwupd_remote_get_kind (remote) != FWUPD_REMOTE_KIND_DOWNLOAD)
 			continue;
+		checked = TRUE;
 		if (fwupd_remote_get_age (remote) > *age_oldest)
 			*age_oldest = fwupd_remote_get_age (remote);
+	}
+	if (!checked) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOTHING_TO_DO,
+				     /* TRANSLATORS: error message for a user who ran fwupdmgr refresh recently but no remotes */
+				     "No remotes enabled.");
+		return FALSE;
 	}
 	return TRUE;
 }

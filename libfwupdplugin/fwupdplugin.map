@@ -585,6 +585,10 @@ LIBFWUPDPLUGIN_1.5.0 {
   global:
     fu_common_filename_glob;
     fu_common_is_cpu_intel;
+    fu_device_report_metadata_post;
+    fu_device_report_metadata_pre;
+    fu_fmap_firmware_get_type;
+    fu_fmap_firmware_new;
     fu_plugin_runner_add_security_attrs;
     fu_plugin_runner_device_added;
     fu_plugin_security_changed;
@@ -599,5 +603,6 @@ LIBFWUPDPLUGIN_1.5.0 {
     fu_udev_device_get_sysfs_attr;
     fu_udev_device_pread_full;
     fu_udev_device_pwrite_full;
+    fu_udev_device_write_sysfs;
   local: *;
 } LIBFWUPDPLUGIN_1.4.1;

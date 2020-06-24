@@ -74,6 +74,7 @@ jobs:
           paths:
             - "dist/setup/*.exe"
             - "dist/VERSION"
+            - "dist/news.txt"
       - store_artifacts:
           path: dist/setup
 
@@ -165,7 +166,7 @@ jobs:
           command: |
             go get github.com/tcnksm/ghr
             VERSION=$(cat dist/VERSION)
-            BODY=$(./contrib/ci/generate_news.py $VERSION)
+            BODY=$(cat dist/news.txt)
             ghr -t ${GITHUB_TOKEN} -u ${CIRCLE_PROJECT_USERNAME} -r ${CIRCLE_PROJECT_REPONAME} -c ${CIRCLE_SHA1} -b ${BODY} ${VERSION} ./dist/setup/
 workflows:
   version: 2
