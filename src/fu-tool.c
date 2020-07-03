@@ -53,6 +53,7 @@ struct FuUtilPrivate {
 	GMainLoop		*loop;
 	GOptionContext		*context;
 	FuEngine		*engine;
+	FuEngineRequest		*request;
 	FuProgressbar		*progressbar;
 	gboolean		 no_reboot_check;
 	gboolean		 no_safety_check;
@@ -195,6 +196,8 @@ fu_util_private_free (FuUtilPrivate *priv)
 		g_object_unref (priv->current_device);
 	if (priv->engine != NULL)
 		g_object_unref (priv->engine);
+	if (priv->request != NULL)
+		g_object_unref (priv->request);
 	if (priv->loop != NULL)
 		g_main_loop_unref (priv->loop);
 	if (priv->cancellable != NULL)
@@ -350,6 +353,7 @@ fu_util_get_updates (FuUtilPrivate *priv, gchar **values, GError **error)
 
 		/* get the releases for this device and filter for validity */
 		rels = fu_engine_get_upgrades (priv->engine,
+					       priv->request,
 					       fwupd_device_get_id (dev),
 					       &error_local);
 		if (rels == NULL) {
@@ -415,7 +419,7 @@ fu_util_get_details (FuUtilPrivate *priv, gchar **values, GError **error)
 			     values[0]);
 		return FALSE;
 	}
-	array = fu_engine_get_details (priv->engine, fd, error);
+	array = fu_engine_get_details (priv->engine, priv->request, fd, error);
 	close (fd);
 
 	if (array == NULL)
@@ -916,7 +920,9 @@ fu_util_install (FuUtilPrivate *priv, gchar **values, GError **error)
 			/* is this component valid for the device */
 			task = fu_install_task_new (device, component);
 			if (!fu_engine_check_requirements (priv->engine,
-							   task, priv->flags | FWUPD_INSTALL_FLAG_FORCE,
+							   priv->request,
+							   task,
+							   priv->flags | FWUPD_INSTALL_FLAG_FORCE,
 							   &error_local)) {
 				g_debug ("first pass requirement on %s:%s failed: %s",
 					 fu_device_get_id (device),
@@ -929,7 +935,9 @@ fu_util_install (FuUtilPrivate *priv, gchar **values, GError **error)
 			/* make a second pass using possibly updated version format now */
 			fu_engine_md_refresh_device_from_component (priv->engine, device, component);
 			if (!fu_engine_check_requirements (priv->engine,
-							   task, priv->flags,
+							   priv->request,
+							   task,
+							   priv->flags,
 							   &error_local)) {
 				g_debug ("second pass requirement on %s:%s failed: %s",
 					 fu_device_get_id (device),
@@ -962,7 +970,12 @@ fu_util_install (FuUtilPrivate *priv, gchar **values, GError **error)
 			  G_CALLBACK (fu_util_update_device_changed_cb), priv);
 
 	/* install all the tasks */
-	if (!fu_engine_install_tasks (priv->engine, install_tasks, blob_cab, priv->flags, error))
+	if (!fu_engine_install_tasks (priv->engine,
+				      priv->request,
+				      install_tasks,
+				      blob_cab,
+				      priv->flags,
+				      error))
 		return FALSE;
 
 	fu_util_display_current_message (priv);
@@ -1061,7 +1074,10 @@ fu_util_update_all (FuUtilPrivate *priv, GError **error)
 			continue;
 
 		device_id = fu_device_get_id (dev);
-		rels = fu_engine_get_upgrades (priv->engine, device_id, &error_local);
+		rels = fu_engine_get_upgrades (priv->engine,
+					       priv->request,
+					       device_id,
+					       &error_local);
 		if (rels == NULL) {
 			/* TRANSLATORS: message letting the user know no device upgrade available
 			* %1 is the device name */
@@ -1103,7 +1119,10 @@ fu_util_update_by_id (FuUtilPrivate *priv, const gchar *id, GError **error)
 		return FALSE;
 
 	/* get the releases for this device and filter for validity */
-	rels = fu_engine_get_upgrades (priv->engine, fu_device_get_id (dev), error);
+	rels = fu_engine_get_upgrades (priv->engine,
+				       priv->request,
+				       fu_device_get_id (dev),
+				       error);
 	if (rels == NULL)
 		return FALSE;
 	rel = g_ptr_array_index (rels, 0);
@@ -1192,7 +1211,10 @@ fu_util_reinstall (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* try to lookup/match release from client */
-	rels = fu_engine_get_releases_for_device (priv->engine, dev, error);
+	rels = fu_engine_get_releases_for_device (priv->engine,
+						  priv->request,
+						  dev,
+						  error);
 	if (rels == NULL)
 		return FALSE;
 
@@ -1813,7 +1835,10 @@ fu_util_get_history (FuUtilPrivate *priv, gchar **values, GError **error)
 		}
 
 		/* try to lookup releases from client */
-		rels = fu_engine_get_releases (priv->engine, fwupd_device_get_id (dev), error);
+		rels = fu_engine_get_releases (priv->engine,
+					       priv->request,
+					       fwupd_device_get_id (dev),
+					       error);
 		if (rels == NULL)
 			return FALSE;
 
@@ -1846,26 +1871,41 @@ fu_util_get_history (FuUtilPrivate *priv, gchar **values, GError **error)
 static gboolean
 fu_util_refresh_remote (FuUtilPrivate *priv, FwupdRemote *remote, GError **error)
 {
+	const gchar *metadata_uri = NULL;
 	g_autofree gchar *fn_raw = NULL;
 	g_autofree gchar *fn_sig = NULL;
 	g_autoptr(GBytes) bytes_raw = NULL;
 	g_autoptr(GBytes) bytes_sig = NULL;
 
 	/* payload */
-	fn_raw = fu_util_get_user_cache_path (fwupd_remote_get_metadata_uri (remote));
+	metadata_uri = fwupd_remote_get_metadata_uri (remote);
+	if (metadata_uri == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOTHING_TO_DO,
+				     "no metadata URI available");
+		return FALSE;
+	}
+	fn_raw = fu_util_get_user_cache_path (metadata_uri);
 	if (!fu_common_mkdir_parent (fn_raw, error))
 		return FALSE;
-	if (!fu_util_download_out_of_process (fwupd_remote_get_metadata_uri (remote),
-					      fn_raw, error))
+	if (!fu_util_download_out_of_process (metadata_uri, fn_raw, error))
 		return FALSE;
 	bytes_raw = fu_common_get_contents_bytes (fn_raw, error);
 	if (bytes_raw == NULL)
 		return FALSE;
 
 	/* signature */
-	fn_sig = fu_util_get_user_cache_path (fwupd_remote_get_metadata_uri_sig (remote));
-	if (!fu_util_download_out_of_process (fwupd_remote_get_metadata_uri_sig (remote),
-					      fn_sig, error))
+	metadata_uri = fwupd_remote_get_metadata_uri_sig (remote);
+	if (metadata_uri == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOTHING_TO_DO,
+				     "no metadata signature URI available");
+		return FALSE;
+	}
+	fn_sig = fu_util_get_user_cache_path (metadata_uri);
+	if (!fu_util_download_out_of_process (metadata_uri, fn_sig, error))
 		return FALSE;
 	bytes_sig = fu_common_get_contents_bytes (fn_sig, error);
 	if (bytes_sig == NULL)
@@ -2007,9 +2047,9 @@ main (int argc, char *argv[])
 		{ "show-all-devices", '\0', 0, G_OPTION_ARG_NONE, &priv->show_all_devices,
 			/* TRANSLATORS: command line option */
 			_("Show devices that are not updatable"), NULL },
-		{ "plugin-whitelist", '\0', 0, G_OPTION_ARG_STRING_ARRAY, &plugin_glob,
+		{ "plugin-enable", '\0', 0, G_OPTION_ARG_STRING_ARRAY, &plugin_glob,
 			/* TRANSLATORS: command line option */
-			_("Manually whitelist specific plugins"), NULL },
+			_("Manually enable specific plugins"), NULL },
 		{ "prepare", '\0', 0, G_OPTION_ARG_NONE, &priv->prepare_blob,
 			/* TRANSLATORS: command line option */
 			_("Run the plugin composite prepare routine when using install-blob"), NULL },
@@ -2050,6 +2090,7 @@ main (int argc, char *argv[])
 	/* create helper object */
 	priv->loop = g_main_loop_new (NULL, FALSE);
 	priv->progressbar = fu_progressbar_new ();
+	priv->request = fu_engine_request_new ();
 
 	/* add commands */
 	fu_util_cmd_array_add (cmd_array,
@@ -2234,6 +2275,11 @@ main (int argc, char *argv[])
 		priv->no_reboot_check = TRUE;
 		priv->no_safety_check = TRUE;
 		fu_progressbar_set_interactive (priv->progressbar, FALSE);
+	} else {
+		/* set our implemented feature set */
+		fu_engine_request_set_feature_flags (priv->request,
+						     FWUPD_FEATURE_FLAG_DETACH_ACTION |
+						     FWUPD_FEATURE_FLAG_UPDATE_ACTION);
 	}
 
 	/* get a list of the commands */
@@ -2309,7 +2355,7 @@ main (int argc, char *argv[])
 		return EXIT_SUCCESS;
 	}
 
-	/* any plugin whitelist specified */
+	/* any plugin allowlist specified */
 	for (guint i = 0; plugin_glob != NULL && plugin_glob[i] != NULL; i++)
 		fu_engine_add_plugin_filter (priv->engine, plugin_glob[i]);
 

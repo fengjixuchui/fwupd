@@ -1210,16 +1210,19 @@ fu_util_device_to_string (FwupdDevice *dev, guint idt)
 		/* TRANSLATORS: hardware state, e.g. "pending" */
 		fu_common_string_append_kv (str, idt + 1, _("Update State"),
 					    fwupd_update_state_to_string (state));
+
+		if (state == FWUPD_UPDATE_STATE_SUCCESS) {
+			tmp = fwupd_device_get_update_message (dev);
+			if (tmp != NULL) {
+				/* TRANSLATORS: helpful messages from last update */
+				fu_common_string_append_kv (str, idt + 1, _("Update Message"), tmp);
+			}
+		}
 	}
 	tmp = fwupd_device_get_update_error (dev);
 	if (tmp != NULL) {
 		/* TRANSLATORS: error message from last update attempt */
 		fu_common_string_append_kv (str, idt + 1, _("Update Error"), tmp);
-	}
-	tmp = fwupd_device_get_update_message (dev);
-	if (tmp != NULL) {
-		/* TRANSLATORS: helpful messages from last update */
-		fu_common_string_append_kv (str, idt + 1, _("Update Message"), tmp);
 	}
 
 	/* modified date: for history devices */
@@ -1553,6 +1556,7 @@ fu_util_remote_to_string (FwupdRemote *remote, guint idt)
 static void
 fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str)
 {
+	g_autofree gchar *name = fu_security_attr_get_name (attr);
 	if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_OBSOLETED)) {
 		g_string_append (str, "✦ ");
 	} else if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS)) {
@@ -1560,8 +1564,8 @@ fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str)
 	} else {
 		g_string_append (str, "✘ ");
 	}
-	g_string_append_printf (str, "%s:", fu_security_attr_get_name (attr));
-	for (guint i = fu_common_strwidth (fu_security_attr_get_name (attr)); i < 30; i++)
+	g_string_append_printf (str, "%s:", name);
+	for (guint i = fu_common_strwidth (name); i < 30; i++)
 		g_string_append (str, " ");
 	if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_OBSOLETED)) {
 		g_string_append_printf (str, "\033[37m\033[1m%s\033[0m", fu_security_attr_get_result (attr));
@@ -1592,6 +1596,7 @@ fu_util_security_attrs_to_string (GPtrArray *attrs)
 	GString *str = g_string_new (NULL);
 	gboolean low_help = FALSE;
 	gboolean runtime_help = FALSE;
+	gboolean pcr0_help = FALSE;
 
 	for (guint j = 1; j <= FWUPD_SECURITY_ATTR_LEVEL_LAST; j++) {
 		gboolean has_header = FALSE;
@@ -1608,6 +1613,12 @@ fu_util_security_attrs_to_string (GPtrArray *attrs)
 			if (j < FWUPD_SECURITY_ATTR_LEVEL_IMPORTANT &&
 			    !fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
 				low_help = TRUE;
+
+			/* check for PCR0 not matching */
+			if (g_strcmp0 (fwupd_security_attr_get_appstream_id (attr),
+					FWUPD_SECURITY_ATTR_ID_TPM_RECONSTRUCTION_PCR0) == 0 &&
+			    fwupd_security_attr_get_result (attr) == FWUPD_SECURITY_ATTR_RESULT_NOT_VALID)
+				    pcr0_help = TRUE;
 		}
 	}
 	for (guint i = 0; i < attrs->len; i++) {
@@ -1643,6 +1654,14 @@ fu_util_security_attrs_to_string (GPtrArray *attrs)
 					/* TRANSLATORS: this is instructions on how to improve the HSI suffix */
 					_("This system has HSI runtime issues."),
 					"https://github.com/fwupd/fwupd/wiki/Host-security-ID-runtime-issues");
+	}
+
+	if (pcr0_help) {
+		g_string_append_printf (str, "\n%s\n » %s\n",
+					/* TRANSLATORS: this is more background on a security measurement problem */
+					_("The TPM PCR0 differes from reconstruction."),
+					"https://github.com/fwupd/fwupd/wiki/TPM-PCR0-differs-from-reconstruction");
+
 	}
 
 	return g_string_free (str, FALSE);

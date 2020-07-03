@@ -116,6 +116,7 @@ typedef enum {
 #define FWUPD_SECURITY_ATTR_ID_FWUPD_ATTESTATION	"org.fwupd.hsi.FwupdAttestation"	/* Since: 1.5.0 */
 #define FWUPD_SECURITY_ATTR_ID_FWUPD_PLUGINS		"org.fwupd.hsi.FwupdPlugins"		/* Since: 1.5.0 */
 #define FWUPD_SECURITY_ATTR_ID_FWUPD_UPDATES		"org.fwupd.hsi.FwupdUpdates"		/* Since: 1.5.0 */
+#define FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD		"org.fwupd.hsi.IntelBootguard"		/* Since: 1.5.0 */
 #define FWUPD_SECURITY_ATTR_ID_INTEL_CET		"org.fwupd.hsi.IntelCet"		/* Since: 1.5.0 */
 #define FWUPD_SECURITY_ATTR_ID_INTEL_SMAP		"org.fwupd.hsi.IntelSmap"		/* Since: 1.5.0 */
 #define FWUPD_SECURITY_ATTR_ID_IOMMU			"org.fwupd.hsi.Iommu"			/* Since: 1.5.0 */
@@ -161,6 +162,11 @@ void		 fwupd_security_attr_add_obsolete	(FwupdSecurityAttr	*self,
 							 const gchar		*appstream_id);
 gboolean	 fwupd_security_attr_has_obsolete	(FwupdSecurityAttr	*self,
 							 const gchar		*appstream_id);
+const gchar	*fwupd_security_attr_get_metadata	(FwupdSecurityAttr	*self,
+							 const gchar		*key);
+void		 fwupd_security_attr_add_metadata	(FwupdSecurityAttr	*self,
+							 const gchar		*key,
+							 const gchar		*value);
 FwupdSecurityAttrFlags fwupd_security_attr_get_flags	(FwupdSecurityAttr	*self);
 void		 fwupd_security_attr_set_flags		(FwupdSecurityAttr	*self,
 							 FwupdSecurityAttrFlags flags);

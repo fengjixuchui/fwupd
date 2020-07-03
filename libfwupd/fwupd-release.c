@@ -56,6 +56,7 @@ typedef struct {
 	FwupdReleaseFlags		 flags;
 	FwupdReleaseUrgency		 urgency;
 	gchar				*update_message;
+	gchar				*update_image;
 } FwupdReleasePrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (FwupdRelease, fwupd_release, G_TYPE_OBJECT)
@@ -207,6 +208,42 @@ fwupd_release_set_update_message (FwupdRelease *release, const gchar *update_mes
 	g_return_if_fail (FWUPD_IS_RELEASE (release));
 	g_free (priv->update_message);
 	priv->update_message = g_strdup (update_message);
+}
+
+/**
+ * fwupd_release_get_update_image:
+ * @release: A #FwupdRelease
+ *
+ * Gets the update image.
+ *
+ * Returns: the update image URL, or %NULL if unset
+ *
+ * Since: 1.4.5
+ **/
+const gchar *
+fwupd_release_get_update_image (FwupdRelease *release)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_val_if_fail (FWUPD_IS_RELEASE (release), NULL);
+	return priv->update_image;
+}
+
+/**
+ * fwupd_release_set_update_image:
+ * @release: A #FwupdRelease
+ * @update_image: the update image URL
+ *
+ * Sets the update image.
+ *
+ * Since: 1.4.5
+ **/
+void
+fwupd_release_set_update_image (FwupdRelease *release, const gchar *update_image)
+{
+	FwupdReleasePrivate *priv = GET_PRIVATE (release);
+	g_return_if_fail (FWUPD_IS_RELEASE (release));
+	g_free (priv->update_image);
+	priv->update_image = g_strdup (update_image);
 }
 
 /**
@@ -1237,33 +1274,6 @@ fwupd_release_set_install_duration (FwupdRelease *release, guint32 duration)
 	priv->install_duration = duration;
 }
 
-static GVariant *
-_hash_kv_to_variant (GHashTable *hash)
-{
-	GVariantBuilder builder;
-	g_autoptr(GList) keys = g_hash_table_get_keys (hash);
-	g_variant_builder_init (&builder, G_VARIANT_TYPE_ARRAY);
-	for (GList *l = keys; l != NULL; l = l->next) {
-		const gchar *key = l->data;
-		const gchar *value = g_hash_table_lookup (hash, key);
-		g_variant_builder_add (&builder, "{ss}", key, value);
-	}
-	return g_variant_builder_end (&builder);
-}
-
-static GHashTable *
-_variant_to_hash_kv (GVariant *dict)
-{
-	GHashTable *hash = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
-	GVariantIter iter;
-	const gchar *key;
-	const gchar *value;
-	g_variant_iter_init (&iter, dict);
-	while (g_variant_iter_loop (&iter, "{ss}", &key, &value))
-		g_hash_table_insert (hash, g_strdup (key), g_strdup (value));
-	return hash;
-}
-
 /**
  * fwupd_release_to_variant:
  * @release: A #FwupdRelease
@@ -1420,7 +1430,7 @@ fwupd_release_to_variant (FwupdRelease *release)
 	if (g_hash_table_size (priv->metadata) > 0) {
 		g_variant_builder_add (&builder, "{sv}",
 				       FWUPD_RESULT_KEY_METADATA,
-				       _hash_kv_to_variant (priv->metadata));
+				       fwupd_hash_kv_to_variant (priv->metadata));
 	}
 	if (priv->install_duration > 0) {
 		g_variant_builder_add (&builder, "{sv}",
@@ -1545,9 +1555,13 @@ fwupd_release_from_key_value (FwupdRelease *release, const gchar *key, GVariant 
 		fwupd_release_set_update_message (release, g_variant_get_string (value, NULL));
 		return;
 	}
+	if (g_strcmp0 (key, FWUPD_RESULT_KEY_UPDATE_IMAGE) == 0) {
+		fwupd_release_set_update_image (release, g_variant_get_string (value, NULL));
+		return;
+	}
 	if (g_strcmp0 (key, FWUPD_RESULT_KEY_METADATA) == 0) {
 		g_hash_table_unref (priv->metadata);
-		priv->metadata = _variant_to_hash_kv (value);
+		priv->metadata = fwupd_variant_to_hash_kv (value);
 		return;
 	}
 }
@@ -1562,6 +1576,21 @@ fwupd_pad_kv_str (GString *str, const gchar *key, const gchar *value)
 	for (gsize i = strlen (key); i < 20; i++)
 		g_string_append (str, " ");
 	g_string_append_printf (str, "%s\n", value);
+}
+
+static void
+fwupd_pad_kv_unx (GString *str, const gchar *key, guint64 value)
+{
+	g_autoptr(GDateTime) date = NULL;
+	g_autofree gchar *tmp = NULL;
+
+	/* ignore */
+	if (value == 0)
+		return;
+
+	date = g_date_time_new_from_unix_utc ((gint64) value);
+	tmp = g_date_time_format (date, "%F");
+	fwupd_pad_kv_str (str, key, tmp);
 }
 
 static void
@@ -1700,6 +1729,7 @@ fwupd_release_to_json (FwupdRelease *release, JsonBuilder *builder)
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_DETACH_CAPTION, priv->detach_caption);
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_DETACH_IMAGE, priv->detach_image);
 	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_UPDATE_MESSAGE, priv->update_message);
+	fwupd_release_json_add_string (builder, FWUPD_RESULT_KEY_UPDATE_IMAGE, priv->update_image);
 
 	/* metadata */
 	keys = g_hash_table_get_keys (priv->metadata);
@@ -1752,7 +1782,7 @@ fwupd_release_to_string (FwupdRelease *release)
 	}
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_LICENSE, priv->license);
 	fwupd_pad_kv_siz (str, FWUPD_RESULT_KEY_SIZE, priv->size);
-	fwupd_pad_kv_siz (str, FWUPD_RESULT_KEY_CREATED, priv->created);
+	fwupd_pad_kv_unx (str, FWUPD_RESULT_KEY_CREATED, priv->created);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_URI, priv->uri);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_HOMEPAGE, priv->homepage);
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_DETAILS_URL, priv->details_url);
@@ -1768,6 +1798,8 @@ fwupd_release_to_string (FwupdRelease *release)
 	fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_DETACH_IMAGE, priv->detach_image);
 	if (priv->update_message != NULL)
 		fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_UPDATE_MESSAGE, priv->update_message);
+	if (priv->update_message != NULL)
+		fwupd_pad_kv_str (str, FWUPD_RESULT_KEY_UPDATE_IMAGE, priv->update_image);
 	/* metadata */
 	keys = g_hash_table_get_keys (priv->metadata);
 	for (GList *l = keys; l != NULL; l = l->next) {
@@ -1820,6 +1852,7 @@ fwupd_release_finalize (GObject *object)
 	g_free (priv->version);
 	g_free (priv->remote_id);
 	g_free (priv->update_message);
+	g_free (priv->update_image);
 	g_ptr_array_unref (priv->categories);
 	g_ptr_array_unref (priv->issues);
 	g_ptr_array_unref (priv->checksums);
