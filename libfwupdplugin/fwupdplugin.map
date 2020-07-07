@@ -583,6 +583,7 @@ LIBFWUPDPLUGIN_1.4.1 {
 
 LIBFWUPDPLUGIN_1.4.5 {
   global:
+    fu_udev_device_get_devtype;
     fu_udev_device_get_parent_name;
     fu_udev_device_get_sysfs_attr;
     fu_udev_device_pread_full;
@@ -608,6 +609,7 @@ LIBFWUPDPLUGIN_1.5.0 {
     fu_security_attrs_get_all;
     fu_security_attrs_get_type;
     fu_security_attrs_new;
+    fu_security_attrs_remove_all;
     fu_security_attrs_to_variant;
   local: *;
 } LIBFWUPDPLUGIN_1.4.5;
