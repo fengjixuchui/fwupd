@@ -125,6 +125,7 @@ test_link_args = [
   '-Wl,-z,relro',
   '-Wl,-z,defs',
   '-Wl,-z,now',
+  '-Wl,-z,ibt,-z,shstk',
 ]
 foreach arg: test_link_args
   if cc.has_link_argument(arg)
@@ -145,6 +146,9 @@ add_project_arguments('-DFWUPD_DISABLE_DEPRECATED', language : 'c')
 # needed for symlink() and BYTE_ORDER
 add_project_arguments('-D_BSD_SOURCE', language : 'c')
 add_project_arguments('-D_XOPEN_SOURCE=700', language : 'c')
+
+# needed for memfd_create()
+add_project_arguments('-D_GNU_SOURCE', language : 'c')
 
 # sanity check
 if get_option('build') == 'all'
@@ -262,12 +266,19 @@ if cc.has_header('fnmatch.h')
 endif
 if cc.has_header('cpuid.h') and (host_cpu == 'x86' or host_cpu == 'x86_64')
   conf.set('HAVE_CPUID_H', '1')
+else
+  if get_option('plugin_msr')
+    error('cpuid.h is required for -Dplugin_msr=true')
+  endif
 endif
 if cc.has_function('getuid')
   conf.set('HAVE_GETUID', '1')
 endif
 if cc.has_function('realpath')
   conf.set('HAVE_REALPATH', '1')
+endif
+if cc.has_function('sigaction')
+  conf.set('HAVE_SIGACTION', '1')
 endif
 if cc.has_header_symbol('locale.h', 'LC_MESSAGES')
   conf.set('HAVE_LC_MESSAGES', '1')

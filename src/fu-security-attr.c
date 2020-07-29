@@ -29,13 +29,39 @@ fu_security_attr_get_name (FwupdSecurityAttr *attr)
 		/* TRANSLATORS: Title: DMA as in https://en.wikipedia.org/wiki/DMA_attack  */
 		return g_strdup (_("Pre-boot DMA protection"));
 	}
-	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD) == 0) {
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD_ENABLED) == 0) {
 		/* TRANSLATORS: Title: BootGuard is a trademark from Intel */
 		return g_strdup (_("Intel BootGuard"));
 	}
-	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_CET) == 0) {
-		/* TRANSLATORS: Title: CET = Control-flow Enforcement Technology */
-		return g_strdup (_("Intel CET"));
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD_VERIFIED) == 0) {
+		/* TRANSLATORS: Title: BootGuard is a trademark from Intel,
+		 * verified boot refers to the way the boot process is verified */
+		return g_strdup (_("Intel BootGuard verified boot"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD_ACM) == 0) {
+		/* TRANSLATORS: Title: BootGuard is a trademark from Intel,
+		 * ACM means to verify the integrity of Initial Boot Block */
+		return g_strdup (_("Intel BootGuard ACM protected"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD_POLICY) == 0) {
+		/* TRANSLATORS: Title: BootGuard is a trademark from Intel,
+		 * error policy is what to do on failure */
+		return g_strdup (_("Intel BootGuard error policy"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_BOOTGUARD_OTP) == 0) {
+		/* TRANSLATORS: Title: BootGuard is a trademark from Intel,
+		 * OTP = one time programmable */
+		return g_strdup (_("Intel BootGuard OTP fuse"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_CET_ENABLED) == 0) {
+		/* TRANSLATORS: Title: CET = Control-flow Enforcement Technology,
+		 * enabled means supported by the processor */
+		return g_strdup (_("Intel CET Enabled"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_CET_ACTIVE) == 0) {
+		/* TRANSLATORS: Title: CET = Control-flow Enforcement Technology,
+		 * active means being used by the OS */
+		return g_strdup (_("Intel CET Active"));
 	}
 	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_SMAP) == 0) {
 		/* TRANSLATORS: Title: SMAP = Supervisor Mode Access Prevention */
@@ -98,10 +124,13 @@ fu_security_attr_get_name (FwupdSecurityAttr *attr)
 		const gchar *kind = fwupd_security_attr_get_metadata (attr, "kind");
 		if (kind != NULL) {
 			/* TRANSLATORS: Title: %s is ME kind, e.g. CSME/TXT */
-			return g_strdup_printf (_("%s override strap"), kind);
+			return g_strdup_printf (_("%s override"), kind);
 		}
-		/* TRANSLATORS: Title: MEI = Intel Management Engine */
-		return g_strdup (_("MEI override strap"));
+		/* TRANSLATORS: Title: MEI = Intel Management Engine, and the
+		 * "override" is the physical PIN that can be driven to
+		 * logic high -- luckily it is probably not accessible to
+		 * end users on consumer boards */
+		return g_strdup (_("MEI override"));
 	}
 	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_MEI_VERSION) == 0) {
 		/* TRANSLATORS: Title: MEI = Intel Management Engine */
@@ -128,6 +157,12 @@ fu_security_attr_get_name (FwupdSecurityAttr *attr)
 	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_FWUPD_PLUGINS) == 0) {
 		/* TRANSLATORS: Title: if the fwupd plugins are all present and correct */
 		return g_strdup (_("fwupd plugins"));
+	}
+	if (g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_DCI_ENABLED) == 0 ||
+	    g_strcmp0 (appstream_id, FWUPD_SECURITY_ATTR_ID_INTEL_DCI_LOCKED) == 0) {
+		/* TRANSLATORS: Title: Direct Connect Interface (DCI) allows
+		 * debugging of Intel processors using the USB3 port */
+		return g_strdup (_("Intel DCI debugger"));
 	}
 
 	/* we should not get here */
