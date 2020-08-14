@@ -243,7 +243,10 @@ Data files for installed tests.
 %global efiarch aa64
 %endif
 %global fwup_efi_fn $RPM_BUILD_ROOT%{_libexecdir}/fwupd/efi/fwupd%{efiarch}.efi
-%pesign -s -i %{fwup_efi_fn} -o %{fwup_efi_fn}.signed
+%pesign -s -i %{fwup_efi_fn} -o %{fwup_efi_fn}.tmp
+%define __pesign_client_cert fwupd-signer
+%pesign -s -i %{fwup_efi_fn}.tmp -o %{fwup_efi_fn}.signed
+rm -vf %{fwup_efi_fn}.tmp
 %endif
 
 mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
@@ -275,7 +278,9 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %config(noreplace)%{_sysconfdir}/fwupd/thunderbolt.conf
 %dir %{_libexecdir}/fwupd
 %{_libexecdir}/fwupd/fwupd
+%ifarch i686 x86_64
 %{_libexecdir}/fwupd/fwupd-detect-cet
+%endif
 %{_libexecdir}/fwupd/fwupdoffline
 %if 0%{?have_uefi}
 %{_libexecdir}/fwupd/efi/*.efi

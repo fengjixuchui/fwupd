@@ -1,6 +1,9 @@
 _fwupdtool_cmd_list=(
 	'activate'
 	'build-firmware'
+	'esp-list'
+	'esp-mount'
+	'esp-unmount'
 	'firmware-convert'
 	'firmware-parse'
 	'get-updates'
@@ -38,7 +41,7 @@ _fwupdtool_opts=(
 	'--allow-older'
 	'--force'
 	'--show-all-devices'
-	'--plugin-enable'
+	'--plugins'
 	'--prepare'
 	'--cleanup'
 	'--filter'
@@ -82,7 +85,7 @@ _fwupdtool()
 	command=${COMP_WORDS[1]}
 
 	case $prev in
-	--plugin-enable)
+	--plugins)
 		_show_plugins
 		return 0
 		;;

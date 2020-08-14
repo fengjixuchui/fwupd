@@ -1469,9 +1469,11 @@ fwupd_client_install_release (FwupdClient *client,
 	g_autofree gchar *checksum_actual = NULL;
 	g_autofree gchar *uri_str = NULL;
 	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(SoupURI) uri = NULL;
 
 	/* work out what remote-specific URI fields this should use */
 	uri_tmp = fwupd_release_get_uri (release);
+	uri = soup_uri_new (uri_tmp);
 	remote_id = fwupd_release_get_remote_id (release);
 	if (remote_id != NULL) {
 		g_autoptr(FwupdRemote) remote = NULL;
@@ -1482,8 +1484,8 @@ fwupd_client_install_release (FwupdClient *client,
 		if (remote == NULL)
 			return FALSE;
 
-		/* local and directory remotes have the firmware already */
-		if (fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_LOCAL) {
+		/* local and directory remotes may have the firmware already */
+		if (fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_LOCAL && uri == NULL) {
 			const gchar *fn_cache = fwupd_remote_get_filename_cache (remote);
 			g_autofree gchar *path = g_path_get_dirname (fn_cache);
 
@@ -2115,6 +2117,98 @@ fwupd_client_set_approved_firmware (FwupdClient *client,
 	/* call into daemon */
 	val = g_dbus_proxy_call_sync (priv->proxy,
 				      "SetApprovedFirmware",
+				      g_variant_new ("(^as)", checksums),
+				      G_DBUS_CALL_FLAGS_NONE,
+				      -1,
+				      cancellable,
+				      error);
+	if (val == NULL) {
+		if (error != NULL)
+			fwupd_client_fixup_dbus_error (*error);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/**
+ * fwupd_client_get_blocked_firmware:
+ * @client: A #FwupdClient
+ * @cancellable: the #GCancellable, or %NULL
+ * @error: the #GError, or %NULL
+ *
+ * Gets the list of blocked firmware.
+ *
+ * Returns: (transfer full): list of checksums, or %NULL
+ *
+ * Since: 1.4.6
+ **/
+gchar **
+fwupd_client_get_blocked_firmware (FwupdClient *client,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	FwupdClientPrivate *priv = GET_PRIVATE (client);
+	g_autoptr(GVariant) val = NULL;
+	gchar **retval = NULL;
+
+	g_return_val_if_fail (FWUPD_IS_CLIENT (client), NULL);
+	g_return_val_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable), NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+	/* connect */
+	if (!fwupd_client_connect (client, cancellable, error))
+		return NULL;
+
+	/* call into daemon */
+	val = g_dbus_proxy_call_sync (priv->proxy,
+				      "GetBlockedFirmware",
+				      NULL,
+				      G_DBUS_CALL_FLAGS_NONE,
+				      -1,
+				      cancellable,
+				      error);
+	if (val == NULL) {
+		if (error != NULL)
+			fwupd_client_fixup_dbus_error (*error);
+		return NULL;
+	}
+	g_variant_get (val, "(^as)", &retval);
+	return retval;
+}
+
+/**
+ * fwupd_client_set_blocked_firmware:
+ * @client: A #FwupdClient
+ * @checksums: Array of checksums
+ * @cancellable: the #GCancellable, or %NULL
+ * @error: the #GError, or %NULL
+ *
+ * Sets the list of blocked firmware.
+ *
+ * Returns: %TRUE for success
+ *
+ * Since: 1.4.6
+ **/
+gboolean
+fwupd_client_set_blocked_firmware (FwupdClient *client,
+				    gchar **checksums,
+				    GCancellable *cancellable,
+				    GError **error)
+{
+	FwupdClientPrivate *priv = GET_PRIVATE (client);
+	g_autoptr(GVariant) val = NULL;
+
+	g_return_val_if_fail (FWUPD_IS_CLIENT (client), FALSE);
+	g_return_val_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	/* connect */
+	if (!fwupd_client_connect (client, cancellable, error))
+		return FALSE;
+
+	/* call into daemon */
+	val = g_dbus_proxy_call_sync (priv->proxy,
+				      "SetBlockedFirmware",
 				      g_variant_new ("(^as)", checksums),
 				      G_DBUS_CALL_FLAGS_NONE,
 				      -1,
