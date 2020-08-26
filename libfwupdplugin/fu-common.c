@@ -1113,20 +1113,6 @@ fu_common_get_path (FuPathKind path_kind)
 #else
 		return NULL;
 #endif
-	/* /usr/share/fwupd/dbx */
-	case FU_PATH_KIND_EFIDBXDIR:
-		tmp = g_getenv ("FWUPD_EFIDBXDIR");
-		if (tmp != NULL)
-			return g_strdup (tmp);
-#ifdef FWUPD_EFI_DBXDIR
-		tmp = g_getenv ("SNAP");
-		if (tmp != NULL)
-			return g_build_filename (tmp, FWUPD_EFI_DBXDIR, NULL);
-		return g_strdup (FWUPD_EFI_DBXDIR);
-#else
-		basedir = fu_common_get_path (FU_PATH_KIND_LOCALSTATEDIR_PKG);
-		return g_build_filename (basedir, "dbx", NULL);
-#endif
 	/* /etc/fwupd */
 	case FU_PATH_KIND_SYSCONFDIR_PKG:
 		tmp = g_getenv ("CONFIGURATION_DIRECTORY");
@@ -2048,6 +2034,55 @@ fu_common_kernel_locked_down (void)
 }
 
 /**
+ * fu_common_cpuid:
+ * @leaf: The CPUID level, now called the 'leaf' by Intel
+ * @eax: (out) (nullable): EAX register
+ * @ebx: (out) (nullable): EBX register
+ * @ecx: (out) (nullable): ECX register
+ * @edx: (out) (nullable): EDX register
+ * @error: A #GError or NULL
+ *
+ * Calls CPUID and returns the registers for the given leaf.
+ *
+ * Return value: %TRUE if the registers are set.
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_common_cpuid (guint32 leaf,
+		 guint32 *eax,
+		 guint32 *ebx,
+		 guint32 *ecx,
+		 guint32 *edx,
+		 GError **error)
+{
+#ifdef HAVE_CPUID_H
+	guint eax_tmp = 0;
+	guint ebx_tmp = 0;
+	guint ecx_tmp = 0;
+	guint edx_tmp = 0;
+
+	/* get vendor */
+	__get_cpuid_count (leaf, 0x0, &eax_tmp, &ebx_tmp, &ecx_tmp, &edx_tmp);
+	if (eax != NULL)
+		*eax = eax_tmp;
+	if (ebx != NULL)
+		*ebx = ebx_tmp;
+	if (ecx != NULL)
+		*ecx = ecx_tmp;
+	if (edx != NULL)
+		*edx = edx_tmp;
+	return TRUE;
+#else
+	g_set_error_literal (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_SUPPORTED,
+			     "no <cpuid.h> support");
+	return FALSE;
+#endif
+}
+
+/**
  * fu_common_is_cpu_intel:
  *
  * Uses CPUID to discover the CPU vendor and check if it is Intel.
@@ -2059,15 +2094,13 @@ fu_common_kernel_locked_down (void)
 gboolean
 fu_common_is_cpu_intel (void)
 {
-#ifdef HAVE_CPUID_H
-	guint eax = 0;
 	guint ebx = 0;
 	guint ecx = 0;
 	guint edx = 0;
-	guint level = 0;
 
-	/* get vendor */
-	__get_cpuid(level, &eax, &ebx, &ecx, &edx);
+	if (!fu_common_cpuid (0x0, NULL, &ebx, &ecx, &edx, NULL))
+		return FALSE;
+#ifdef HAVE_CPUID_H
 	if (ebx == signature_INTEL_ebx &&
 	    edx == signature_INTEL_edx &&
 	    ecx == signature_INTEL_ecx) {
@@ -2175,7 +2208,7 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 	}
 	devices = fu_common_get_block_devices (connection, error);
 	if (devices == NULL)
-		return FALSE;
+		return NULL;
 	volumes = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	for (guint i = 0; i < devices->len; i++) {
 		const gchar *obj = g_ptr_array_index (devices, i);
@@ -2193,7 +2226,7 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 						    NULL, error);
 		if (proxy_part == NULL) {
 			g_prefix_error (error, "failed to initialize d-bus proxy %s: ", obj);
-			return FALSE;
+			return NULL;
 		}
 		val = g_dbus_proxy_get_cached_property (proxy_part, "Type");
 		if (val == NULL)
@@ -2211,7 +2244,7 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 						    NULL, error);
 		if (proxy_file == NULL) {
 			g_prefix_error (error, "failed to initialize d-bus proxy %s: ", obj);
-			return FALSE;
+			return NULL;
 		}
 		g_ptr_array_add (volumes, fu_volume_new_from_proxy (proxy_file));
 	}
@@ -2250,7 +2283,7 @@ fu_common_get_esp_default (GError **error)
 
 	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
 	if (volumes == NULL)
-		return FALSE;
+		return NULL;
 	for (guint i = 0; i < volumes->len; i++) {
 		FuVolume *vol = g_ptr_array_index (volumes, i);
 		g_ptr_array_add (fu_volume_is_mounted (vol) ? volumes_mtab : volumes_fstab, vol);
@@ -2289,7 +2322,7 @@ fu_common_get_esp_for_path (const gchar *esp_path, GError **error)
 
 	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
 	if (volumes == NULL)
-		return FALSE;
+		return NULL;
 	for (guint i = 0; i < volumes->len; i++) {
 		FuVolume *vol = g_ptr_array_index (volumes, i);
 		g_autofree gchar *vol_basename = g_path_get_basename (fu_volume_get_id (vol));

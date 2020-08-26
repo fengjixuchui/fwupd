@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2015-2017 Peter Jones <pjones@redhat.com>
  * Copyright (C) 2020 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
@@ -35,7 +36,7 @@ fu_dbxtool_get_siglist_system (GError **error)
 	g_autofree guint8 *buf = NULL;
 	if (!fu_efivar_get_data (FU_EFIVAR_GUID_SECURITY_DATABASE, "dbx",
 				 &buf, &bufsz, NULL, error))
-		return FALSE;
+		return NULL;
 	return fu_efi_signature_parser_new (buf, bufsz,
 					    FU_EFI_SIGNATURE_PARSER_FLAGS_NONE,
 					    error);
@@ -47,7 +48,7 @@ fu_dbxtool_get_siglist_local (const gchar *filename, GError **error)
 	gsize bufsz = 0;
 	g_autofree guint8 *buf = NULL;
 	if (!g_file_get_contents (filename, (gchar **) &buf, &bufsz, error))
-		return FALSE;
+		return NULL;
 	return fu_efi_signature_parser_new (buf, bufsz,
 					    FU_EFI_SIGNATURE_PARSER_FLAGS_IGNORE_HEADER,
 					    error);
@@ -219,6 +220,18 @@ main (int argc, char *argv[])
 			/* TRANSLATORS: the user is using a LiveCD or LiveUSB install disk */
 			g_printerr ("%s\n", _("Cannot apply updates on live media"));
 			return EXIT_FAILURE;
+		}
+
+		/* validate this is safe to apply */
+		if (!force) {
+			/* TRANSLATORS: ESP refers to the EFI System Partition */
+			g_print ("%s\n", _("Validating ESP contents…"));
+			if (!fu_uefi_dbx_signature_list_validate (dbx_update, &error)) {
+				/* TRANSLATORS: something with a blocked hash exists
+				 * in the users ESP -- which would be bad! */
+				g_printerr ("%s: %s\n", _("Failed to validate ESP contents"), error->message);
+				return EXIT_FAILURE;
+			}
 		}
 
 		/* TRANSLATORS: actually sending the update to the hardware */

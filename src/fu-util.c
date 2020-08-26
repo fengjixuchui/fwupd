@@ -2034,7 +2034,7 @@ fu_util_get_remote_with_security_report_uri (FuUtilPrivate *priv, GError **error
 			     FWUPD_ERROR,
 			     FWUPD_ERROR_NOT_SUPPORTED,
 			     "No remotes specified SecurityReportURI");
-	return FALSE;
+	return NULL;
 }
 
 static gboolean
@@ -2427,7 +2427,7 @@ fu_util_unblock_firmware (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 	}
 
-	/* TRANSLATORS: we will not offer this firmware to the user */
+	/* TRANSLATORS: we will now offer this firmware to the user */
 	g_print ("%s %s\n", _("Unblocking firmware:"), csum);
 
 	/* remove it from the new list */
