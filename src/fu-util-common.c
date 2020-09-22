@@ -14,6 +14,7 @@
 #include <xmlb.h>
 
 #include "fu-common.h"
+#include "fu-device-private.h"
 #include "fu-util-common.h"
 #include "fu-device.h"
 #include "fu-security-attr.h"
@@ -811,51 +812,86 @@ fu_util_parse_filter_flags (const gchar *filter, FwupdDeviceFlags *include,
 	return TRUE;
 }
 
+typedef struct {
+	guint		 cnt;
+	GString		*str;
+} FuUtilConvertHelper;
+
+static gboolean
+fu_util_convert_description_head_cb (XbNode *n, gpointer user_data)
+{
+	FuUtilConvertHelper *helper = (FuUtilConvertHelper *) user_data;
+	helper->cnt++;
+
+	/* start */
+	if (g_strcmp0 (xb_node_get_element (n), "em") == 0) {
+		g_string_append (helper->str, "\033[3m");
+	} else if (g_strcmp0 (xb_node_get_element (n), "strong") == 0) {
+		g_string_append (helper->str, "\033[1m");
+	} else if (g_strcmp0 (xb_node_get_element (n), "code") == 0) {
+		g_string_append (helper->str, "`");
+	} else if (g_strcmp0 (xb_node_get_element (n), "li") == 0) {
+		g_string_append (helper->str, "• ");
+	} else if (g_strcmp0 (xb_node_get_element (n), "p") == 0 ||
+		   g_strcmp0 (xb_node_get_element (n), "ul") == 0 ||
+		   g_strcmp0 (xb_node_get_element (n), "ol") == 0) {
+		g_string_append (helper->str, "\n");
+	}
+
+	/* text */
+	if (xb_node_get_text (n) != NULL)
+		g_string_append (helper->str, xb_node_get_text (n));
+
+	return FALSE;
+}
+
+static gboolean
+fu_util_convert_description_tail_cb (XbNode *n, gpointer user_data)
+{
+	FuUtilConvertHelper *helper = (FuUtilConvertHelper *) user_data;
+	helper->cnt++;
+
+	/* end */
+	if (g_strcmp0 (xb_node_get_element (n), "em") == 0 ||
+	    g_strcmp0 (xb_node_get_element (n), "strong") == 0) {
+		g_string_append (helper->str, "\033[0m");
+	} else if (g_strcmp0 (xb_node_get_element (n), "code") == 0) {
+		g_string_append (helper->str, "`");
+	} else if (g_strcmp0 (xb_node_get_element (n), "li") == 0) {
+		g_string_append (helper->str, "\n");
+	} else if (g_strcmp0 (xb_node_get_element (n), "p") == 0) {
+		g_string_append (helper->str, "\n");
+	}
+
+	/* tail */
+	if (xb_node_get_tail (n) != NULL)
+		g_string_append (helper->str, xb_node_get_tail (n));
+
+	return FALSE;
+}
+
 gchar *
 fu_util_convert_description (const gchar *xml, GError **error)
 {
 	g_autoptr(GString) str = g_string_new (NULL);
 	g_autoptr(XbNode) n = NULL;
 	g_autoptr(XbSilo) silo = NULL;
+	FuUtilConvertHelper helper = {
+		.cnt = 0,
+		.str = str,
+	};
 
 	/* parse XML */
 	silo = xb_silo_new_from_xml (xml, error);
 	if (silo == NULL)
 		return NULL;
 
+	/* convert to something we can show on the console */
 	n = xb_silo_get_root (silo);
-	while (n != NULL) {
-		g_autoptr(XbNode) n2 = NULL;
-
-		/* support <p>, <ul>, <ol> and <li>, ignore all else */
-		if (g_strcmp0 (xb_node_get_element (n), "p") == 0) {
-			g_string_append_printf (str, "%s\n\n", xb_node_get_text (n));
-		} else if (g_strcmp0 (xb_node_get_element (n), "ul") == 0) {
-			g_autoptr(GPtrArray) children = xb_node_get_children (n);
-			for (guint i = 0; i < children->len; i++) {
-				XbNode *nc = g_ptr_array_index (children, i);
-				if (g_strcmp0 (xb_node_get_element (nc), "li") == 0) {
-					g_string_append_printf (str, " • %s\n",
-								xb_node_get_text (nc));
-				}
-			}
-			g_string_append (str, "\n");
-		} else if (g_strcmp0 (xb_node_get_element (n), "ol") == 0) {
-			g_autoptr(GPtrArray) children = xb_node_get_children (n);
-			for (guint i = 0; i < children->len; i++) {
-				XbNode *nc = g_ptr_array_index (children, i);
-				if (g_strcmp0 (xb_node_get_element (nc), "li") == 0) {
-					g_string_append_printf (str, " %u. %s\n",
-								i + 1,
-								xb_node_get_text (nc));
-				}
-			}
-			g_string_append (str, "\n");
-		}
-
-		n2 = xb_node_get_next (n);
-		g_set_object (&n, n2);
-	}
+	xb_node_transmogrify (n,
+			      fu_util_convert_description_head_cb,
+			      fu_util_convert_description_tail_cb,
+			      &helper);
 
 	/* success */
 	return fu_common_strstrip (str->str);
@@ -931,7 +967,7 @@ fu_util_device_flag_to_string (guint64 device_flag)
 	}
 	if (device_flag == FWUPD_DEVICE_FLAG_REQUIRE_AC) {
 		/* TRANSLATORS: Must be plugged in to an outlet */
-		return _("Requires AC power");
+		return _("System requires external power source");
 	}
 	if (device_flag == FWUPD_DEVICE_FLAG_LOCKED) {
 		/* TRANSLATORS: Is locked and can be unlocked */
@@ -1510,9 +1546,16 @@ fu_util_remote_to_string (FwupdRemote *remote, guint idt)
 }
 
 static void
-fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str)
+fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str, FuSecurityAttrToStringFlags flags)
 {
-	g_autofree gchar *name = fu_security_attr_get_name (attr);
+	g_autofree gchar *name = NULL;
+
+	/* hide obsoletes by default */
+	if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_OBSOLETED) &&
+	    (flags & FU_SECURITY_ATTR_TO_STRING_FLAG_SHOW_OBSOLETES) == 0)
+		return;
+
+	name = fu_security_attr_get_name (attr);
 	if (name == NULL)
 		name = g_strdup (fwupd_security_attr_get_appstream_id (attr));
 	if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_OBSOLETED)) {
@@ -1532,7 +1575,8 @@ fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str)
 	} else {
 		g_string_append_printf (str, "\033[31m\033[1m%s\033[0m", fu_security_attr_get_result (attr));
 	}
-	if (fwupd_security_attr_get_url (attr) != NULL) {
+	if ((flags & FU_SECURITY_ATTR_TO_STRING_FLAG_SHOW_URLS) > 0 &&
+	    fwupd_security_attr_get_url (attr) != NULL) {
 		g_string_append_printf (str, ": %s",
 					fwupd_security_attr_get_url (attr));
 	}
@@ -1544,7 +1588,7 @@ fu_security_attr_append_str (FwupdSecurityAttr *attr, GString *str)
 }
 
 gchar *
-fu_util_security_attrs_to_string (GPtrArray *attrs)
+fu_util_security_attrs_to_string (GPtrArray *attrs, FuSecurityAttrToStringFlags strflags)
 {
 	FwupdSecurityAttrFlags flags = FWUPD_SECURITY_ATTR_FLAG_NONE;
 	const FwupdSecurityAttrFlags hpi_suffixes[] = {
@@ -1568,7 +1612,7 @@ fu_util_security_attrs_to_string (GPtrArray *attrs)
 				g_string_append_printf (str, "\n\033[1mHSI-%u\033[0m\n", j);
 				has_header = TRUE;
 			}
-			fu_security_attr_append_str (attr, str);
+			fu_security_attr_append_str (attr, str, strflags);
 			/* make sure they have at least HSI-1 */
 			if (j < FWUPD_SECURITY_ATTR_LEVEL_IMPORTANT &&
 			    !fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
@@ -1598,7 +1642,7 @@ fu_util_security_attrs_to_string (GPtrArray *attrs)
 				if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE) &&
 				    !fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
 					runtime_help = TRUE;
-				fu_security_attr_append_str (attr, str);
+				fu_security_attr_append_str (attr, str, strflags);
 			}
 		}
 	}
@@ -1730,4 +1774,22 @@ fu_util_sort_devices_by_flags_cb (gconstpointer a, gconstpointer b)
 		return 1;
 
 	return 0;
+}
+
+static gint
+fu_util_device_order_compare (FuDevice *device1, FuDevice *device2)
+{
+	if (fu_device_get_order (device1) < fu_device_get_order (device2))
+		return -1;
+	if (fu_device_get_order (device1) > fu_device_get_order (device2))
+		return 1;
+	return 0;
+}
+
+gint
+fu_util_device_order_sort_cb (gconstpointer a, gconstpointer b)
+{
+	FuDevice *device_a = *((FuDevice **) a);
+	FuDevice *device_b = *((FuDevice **) b);
+	return fu_util_device_order_compare (device_a, device_b);
 }

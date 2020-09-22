@@ -2398,7 +2398,19 @@ fu_engine_get_plugins (FuEngine *self)
 	return fu_plugin_list_get_all (self->plugin_list);
 }
 
-static FuDevice *
+/**
+ * fu_engine_get_device_by_id:
+ * @self: A #FuEngine
+ * @device_id: A string
+ * @error: A #GError or NULL
+ *
+ * Returns the device from the engine or NULL if not found
+ *
+ * Returns: (transfer full): a #FuDevice
+ *
+ * Since: 1.5.0
+ **/
+FuDevice *
 fu_engine_get_device_by_id (FuEngine *self, const gchar *device_id, GError **error)
 {
 	g_autoptr(FuDevice) device1 = NULL;
@@ -3498,12 +3510,12 @@ fu_engine_update_metadata_bytes (FuEngine *self, const gchar *remote_id,
 	/* verify file */
 	keyring_kind = fwupd_remote_get_keyring_kind (remote);
 	if (keyring_kind != FWUPD_KEYRING_KIND_NONE) {
-		JcatResult *jcat_result;
 		g_autoptr(GError) error_local = NULL;
 		g_autoptr(GInputStream) istream = NULL;
 		g_autoptr(GPtrArray) results = NULL;
 		g_autoptr(JcatFile) jcat_file = jcat_file_new ();
 		g_autoptr(JcatItem) jcat_item = NULL;
+		g_autoptr(JcatResult) jcat_result = NULL;
 		g_autoptr(JcatResult) jcat_result_old = NULL;
 
 		/* load Jcat file */
@@ -4094,6 +4106,19 @@ fu_engine_get_history (FuEngine *self, GError **error)
 	return g_steal_pointer (&devices);
 }
 
+#if !GLIB_CHECK_VERSION(2,62,0)
+static GPtrArray *
+g_ptr_array_copy (GPtrArray *array, GCopyFunc func, gpointer user_data)
+{
+	GPtrArray *new = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
+	for (guint i = 0; i < array->len; i++) {
+		GObject *obj = g_ptr_array_index (array, i);
+		g_ptr_array_add (new, g_object_ref (obj));
+	}
+	return new;
+}
+#endif
+
 /**
  * fu_engine_get_remotes:
  * @self: A #FuEngine
@@ -4119,7 +4144,9 @@ fu_engine_get_remotes (FuEngine *self, GError **error)
 			     "No remotes configured");
 		return NULL;
 	}
-	return g_ptr_array_ref (remotes);
+
+	/* deep copy so the remote list can be kept up to date */
+	return g_ptr_array_copy (remotes, (GCopyFunc) g_object_ref, NULL);
 }
 
 /**
@@ -5192,6 +5219,9 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 
 	/* create new device */
 	fu_device_list_add (self->device_list, device);
+
+	/* fix order */
+	fu_device_list_depsolve_order (self->device_list, device);
 
 	/* fixup the name and format as needed from cached metadata */
 	if (component != NULL)

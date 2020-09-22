@@ -5,6 +5,7 @@ _fwupdtool_cmd_list=(
 	'esp-mount'
 	'esp-unmount'
 	'firmware-convert'
+	'firmware-extract'
 	'firmware-parse'
 	'get-updates'
 	'get-upgrades'
@@ -32,6 +33,8 @@ _fwupdtool_cmd_list=(
 	'refresh'
 	'verify-update'
 	'watch'
+	'unbind-driver'
+	'bind-driver'
 )
 
 _fwupdtool_opts=(
@@ -40,7 +43,7 @@ _fwupdtool_opts=(
 	'--allow-reinstall'
 	'--allow-older'
 	'--force'
-	'--show-all-devices'
+	'--show-all'
 	'--plugins'
 	'--prepare'
 	'--cleanup'

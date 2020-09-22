@@ -48,7 +48,7 @@ typedef struct {
 	GPtrArray			*children;
 	guint				 remove_delay;	/* ms */
 	guint				 progress;
-	guint				 order;
+	gint				 order;
 	guint				 priority;
 	guint				 poll_id;
 	gboolean			 done_probe;
@@ -405,7 +405,7 @@ fu_device_set_poll_interval (FuDevice *self, guint interval)
  *
  * Since: 1.0.8
  **/
-guint
+gint
 fu_device_get_order (FuDevice *self)
 {
 	FuDevicePrivate *priv = GET_PRIVATE (self);
@@ -424,7 +424,7 @@ fu_device_get_order (FuDevice *self)
  * Since: 1.0.8
  **/
 void
-fu_device_set_order (FuDevice *self, guint order)
+fu_device_set_order (FuDevice *self, gint order)
 {
 	FuDevicePrivate *priv = GET_PRIVATE (self);
 	g_return_if_fail (FU_IS_DEVICE (self));
@@ -653,13 +653,6 @@ fu_device_set_parent (FuDevice *self, FuDevice *parent)
 
 	g_return_if_fail (FU_IS_DEVICE (self));
 
-	/* if unspecified, always child before parent */
-	if (parent != NULL &&
-	    fu_device_get_order (parent) == fu_device_get_order (self)) {
-		g_debug ("auto-setting %s order", fu_device_get_id (parent));
-		fu_device_set_order (parent, fu_device_get_order (self) + 1);
-	}
-
 	/* if the parent has quirks, make the child inherit it */
 	if (parent != NULL) {
 		if (fu_device_get_quirks (self) == NULL &&
@@ -802,15 +795,6 @@ fu_device_add_child (FuDevice *self, FuDevice *child)
 
 	/* ensure the parent is also set on the child */
 	fu_device_set_parent (child, self);
-
-	/* order devices so they are updated in the correct sequence */
-	if (fu_device_has_flag (child, FWUPD_DEVICE_FLAG_INSTALL_PARENT_FIRST)) {
-		if (priv->order >= fu_device_get_order (child))
-			fu_device_set_order (child, priv->order + 1);
-	} else {
-		if (priv->order <= fu_device_get_order (child))
-			priv->order = fu_device_get_order (child) + 1;
-	}
 }
 
 /**
@@ -2299,7 +2283,7 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 		g_autofree gchar *sz = g_strdup_printf ("%" G_GUINT64_FORMAT, priv->size_max);
 		fu_common_string_append_kv (str, idt + 1, "FirmwareSizeMax", sz);
 	}
-	if (priv->order > 0)
+	if (priv->order != G_MAXINT)
 		fu_common_string_append_ku (str, idt + 1, "Order", priv->order);
 	if (priv->priority > 0)
 		fu_common_string_append_ku (str, idt + 1, "Priority", priv->priority);
@@ -2487,6 +2471,7 @@ fu_device_prepare_firmware (FuDevice *self,
 
 	/* optionally subclassed */
 	if (klass->prepare_firmware != NULL) {
+		fu_device_set_status (self, FWUPD_STATUS_DECOMPRESSING);
 		firmware = klass->prepare_firmware (self, fw, flags, error);
 		if (firmware == NULL)
 			return NULL;
@@ -3057,6 +3042,82 @@ fu_device_report_metadata_post (FuDevice *self)
 }
 
 /**
+ * fu_device_bind_driver:
+ * @self: A #FuDevice
+ * @subsystem: A subsystem string, e.g. `pci`
+ * @driver: A kernel module name, e.g. `tg3`
+ * @error: A #GError, or %NULL
+ *
+ * Binds a driver to the device, which normally means the kernel driver takes
+ * control of the hardware.
+ *
+ * Returns: %TRUE if driver was bound.
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_device_bind_driver (FuDevice *self,
+		       const gchar *subsystem,
+		       const gchar *driver,
+		       GError **error)
+{
+	FuDeviceClass *klass = FU_DEVICE_GET_CLASS (self);
+
+	g_return_val_if_fail (FU_IS_DEVICE (self), FALSE);
+	g_return_val_if_fail (subsystem != NULL, FALSE);
+	g_return_val_if_fail (driver != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	/* not implemented */
+	if (klass->bind_driver == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "not supported");
+		return FALSE;
+	}
+
+	/* subclass */
+	return klass->bind_driver (self, subsystem, driver, error);
+}
+
+/**
+ * fu_device_unbind_driver:
+ * @self: A #FuDevice
+ * @error: A #GError, or %NULL
+ *
+ * Unbinds the driver from the device, which normally means the kernel releases
+ * the hardware so it can be used from userspace.
+ *
+ * If there is no driver bound then this function will return with success
+ * without actually doing anything.
+ *
+ * Returns: %TRUE if driver was unbound.
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_device_unbind_driver (FuDevice *self, GError **error)
+{
+	FuDeviceClass *klass = FU_DEVICE_GET_CLASS (self);
+
+	g_return_val_if_fail (FU_IS_DEVICE (self), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	/* not implemented */
+	if (klass->unbind_driver == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "not supported");
+		return FALSE;
+	}
+
+	/* subclass */
+	return klass->unbind_driver (self, error);
+}
+
+/**
  * fu_device_incorporate:
  * @self: A #FuDevice
  * @donor: Another #FuDevice
@@ -3223,6 +3284,7 @@ static void
 fu_device_init (FuDevice *self)
 {
 	FuDevicePrivate *priv = GET_PRIVATE (self);
+	priv->order = G_MAXINT;
 	priv->children = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	priv->parent_guids = g_ptr_array_new_with_free_func (g_free);
 	priv->possible_plugins = g_ptr_array_new_with_free_func (g_free);

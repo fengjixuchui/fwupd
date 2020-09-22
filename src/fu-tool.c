@@ -61,7 +61,7 @@ struct FuUtilPrivate {
 	gboolean		 cleanup_blob;
 	gboolean		 enable_json_state;
 	FwupdInstallFlags	 flags;
-	gboolean		 show_all_devices;
+	gboolean		 show_all;
 	gboolean		 disable_ssl_strict;
 	/* only valid in update and downgrade */
 	FuUtilOperation		 current_operation;
@@ -411,7 +411,7 @@ fu_util_get_details (FuUtilPrivate *priv, gchar **values, GError **error)
 	}
 
 	/* implied, important for get-details on a device not in your system */
-	priv->show_all_devices = TRUE;
+	priv->show_all = TRUE;
 
 	/* open file */
 	fd = open (values[0], O_RDONLY);
@@ -473,7 +473,7 @@ fu_util_build_device_tree (FuUtilPrivate *priv, GNode *root, GPtrArray *devs, Fu
 		FuDevice *dev_tmp = g_ptr_array_index (devs, i);
 		if (!fu_util_filter_device (priv, FWUPD_DEVICE (dev_tmp)))
 			continue;
-		if (!priv->show_all_devices &&
+		if (!priv->show_all &&
 		    !fu_util_is_interesting_device (FWUPD_DEVICE (dev_tmp)))
 			continue;
 		if (fu_device_get_parent (dev_tmp) == dev) {
@@ -822,7 +822,9 @@ fu_util_download_out_of_process (const gchar *uri, const gchar *fn, GError **err
 				   { NULL } };
 	for (guint i = 0; argv[i][0] != NULL; i++) {
 		g_autoptr(GError) error_local = NULL;
-		if (!fu_common_find_program_in_path (argv[i][0], &error_local)) {
+		g_autofree gchar *fn_tmp = NULL;
+		fn_tmp = fu_common_find_program_in_path (argv[i][0], &error_local);
+		if (fn_tmp == NULL) {
 			g_debug ("%s", error_local->message);
 			continue;
 		}
@@ -1300,6 +1302,66 @@ fu_util_detach (FuUtilPrivate *priv, gchar **values, GError **error)
 }
 
 static gboolean
+fu_util_unbind_driver (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	g_autoptr(FuDevice) device = NULL;
+	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	/* load engine */
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+		return FALSE;
+
+	/* get device */
+	if (g_strv_length (values) == 1) {
+		device = fu_util_get_device (priv, values[0], error);
+	} else {
+		device = fu_util_prompt_for_device (priv, NULL, error);
+	}
+	if (device == NULL)
+		return FALSE;
+
+	/* run vfunc */
+	locker = fu_device_locker_new (device, error);
+	if (locker == NULL)
+		return FALSE;
+	return fu_device_unbind_driver (device, error);
+}
+
+static gboolean
+fu_util_bind_driver (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	g_autoptr(FuDevice) device = NULL;
+	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	/* load engine */
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+		return FALSE;
+
+	/* get device */
+	if (g_strv_length (values) == 3) {
+		device = fu_util_get_device (priv, values[2], error);
+		if (device == NULL)
+			return FALSE;
+	} else if (g_strv_length (values) == 2) {
+		device = fu_util_prompt_for_device (priv, NULL, error);
+		if (device == NULL)
+			return FALSE;
+	} else {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_ARGS,
+				     "Invalid arguments");
+		return FALSE;
+	}
+
+	/* run vfunc */
+	locker = fu_device_locker_new (device, error);
+	if (locker == NULL)
+		return FALSE;
+	return fu_device_bind_driver (device, values[0], values[1], error);
+}
+
+static gboolean
 fu_util_attach (FuUtilPrivate *priv, gchar **values, GError **error)
 {
 	g_autoptr(FuDevice) device = NULL;
@@ -1328,20 +1390,57 @@ fu_util_attach (FuUtilPrivate *priv, gchar **values, GError **error)
 }
 
 static gboolean
-fu_util_activate (FuUtilPrivate *priv, gchar **values, GError **error)
+fu_util_check_activation_needed (FuUtilPrivate *priv, GError **error)
 {
 	gboolean has_pending = FALSE;
 	g_autoptr(FuHistory) history = fu_history_new ();
+	g_autoptr(GPtrArray) devices = fu_history_get_devices (history, error);
+	if (devices == NULL)
+		return FALSE;
+
+	/* only start up the plugins needed */
+	for (guint i = 0; i < devices->len; i++) {
+		FuDevice *dev = g_ptr_array_index (devices, i);
+		if (fu_device_has_flag (dev, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION)) {
+			fu_engine_add_plugin_filter (priv->engine,
+						     fu_device_get_plugin (dev));
+			has_pending = TRUE;
+		}
+	}
+
+	if (!has_pending) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOTHING_TO_DO,
+				     "No devices to activate");
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+static gboolean
+fu_util_activate (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	gboolean has_pending = FALSE;
 	g_autoptr(GPtrArray) devices = NULL;
 
 	/* check the history database before starting the daemon */
+	if (!fu_util_check_activation_needed (priv, error))
+		return FALSE;
+
+	/* load engine */
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_READONLY_FS, error))
+		return FALSE;
+
+	/* parse arguments */
 	if (g_strv_length (values) == 0) {
-		devices = fu_history_get_devices (history, error);
+		devices = fu_engine_get_devices (priv->engine, error);
 		if (devices == NULL)
 			return FALSE;
 	} else if (g_strv_length (values) == 1) {
 		FuDevice *device;
-		device = fu_history_get_device_by_id (history, values[0], error);
+		device = fu_engine_get_device_by_id (priv->engine, values[0], error);
 		if (device == NULL)
 			return FALSE;
 		devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
@@ -1354,36 +1453,28 @@ fu_util_activate (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 	}
 
-	/* nothing to do */
-	for (guint i = 0; i < devices->len; i++) {
-		FuDevice *dev = g_ptr_array_index (devices, i);
-		if (fu_device_has_flag (dev, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION)) {
-			fu_engine_add_plugin_filter (priv->engine,
-						     fu_device_get_plugin (dev));
-			has_pending = TRUE;
-		}
-	}
-
-	if (!has_pending) {
-    		g_printerr ("No firmware to activate\n");
-    		return TRUE;
-	}
-
-	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_READONLY_FS, error))
-		return FALSE;
-
 	/* activate anything with _NEEDS_ACTIVATION */
+	/* order by device priority */
+	g_ptr_array_sort (devices, fu_util_device_order_sort_cb);
 	for (guint i = 0; i < devices->len; i++) {
 		FuDevice *device = g_ptr_array_index (devices, i);
 		if (!fu_util_filter_device (priv, FWUPD_DEVICE (device)))
 			continue;
 		if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION))
 			continue;
+		has_pending = TRUE;
 		/* TRANSLATORS: shown when shutting down to switch to the new version */
 		g_print ("%s %s…\n", _("Activating firmware update"), fu_device_get_name (device));
 		if (!fu_engine_activate (priv->engine, fu_device_get_id (device), error))
 			return FALSE;
+	}
+
+	if (!has_pending) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOTHING_TO_DO,
+				     "No devices to activate");
+		return FALSE;
 	}
 
 	return TRUE;
@@ -1608,11 +1699,15 @@ fu_util_get_firmware_types (FuUtilPrivate *priv, gchar **values, GError **error)
 }
 
 static gchar *
-fu_util_prompt_for_firmware_type (FuUtilPrivate *priv, GError **error)
+fu_util_prompt_for_firmware_type (FuUtilPrivate *priv, gboolean add_builder, GError **error)
 {
 	g_autoptr(GPtrArray) firmware_types = NULL;
 	guint idx;
 	firmware_types = fu_engine_get_firmware_gtype_ids (priv->engine);
+
+	/* add fake entry */
+	if (add_builder)
+		g_ptr_array_add (firmware_types, g_strdup ("builder"));
 
 	/* TRANSLATORS: get interactive prompt */
 	g_print ("%s\n", _("Choose a firmware type:"));
@@ -1666,7 +1761,7 @@ fu_util_firmware_parse (FuUtilPrivate *priv, gchar **values, GError **error)
 
 	/* find the GType to use */
 	if (firmware_type == NULL)
-		firmware_type = fu_util_prompt_for_firmware_type (priv, error);
+		firmware_type = fu_util_prompt_for_firmware_type (priv, TRUE, error);
 	if (firmware_type == NULL)
 		return FALSE;
 	gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type);
@@ -1683,6 +1778,130 @@ fu_util_firmware_parse (FuUtilPrivate *priv, gchar **values, GError **error)
 	str = fu_firmware_to_string (firmware);
 	g_print ("%s", str);
 	return TRUE;
+}
+
+static gboolean
+fu_util_firmware_extract (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	GType gtype;
+	g_autofree gchar *firmware_type = NULL;
+	g_autofree gchar *str = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GPtrArray) images = NULL;
+
+	/* check args */
+	if (g_strv_length (values) == 0 || g_strv_length (values) > 2) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_ARGS,
+				     "Invalid arguments: filename required");
+		return FALSE;
+	}
+	if (g_strv_length (values) == 2)
+		firmware_type = g_strdup (values[1]);
+
+	/* load file */
+	blob = fu_common_get_contents_bytes (values[0], error);
+	if (blob == NULL)
+		return FALSE;
+
+	/* load engine */
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+		return FALSE;
+
+	/* find the GType to use */
+	if (firmware_type == NULL)
+		firmware_type = fu_util_prompt_for_firmware_type (priv, TRUE, error);
+	if (firmware_type == NULL)
+		return FALSE;
+	gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type);
+	if (gtype == G_TYPE_INVALID) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_FOUND,
+			     "GType %s not supported", firmware_type);
+		return FALSE;
+	}
+	firmware = g_object_new (gtype, NULL);
+	if (!fu_firmware_parse (firmware, blob, priv->flags, error))
+		return FALSE;
+	str = fu_firmware_to_string (firmware);
+	g_print ("%s", str);
+	images = fu_firmware_get_images (firmware);
+	for (guint i = 0; i < images->len; i++) {
+		FuFirmwareImage *img = g_ptr_array_index (images, i);
+		g_autofree gchar *fn = NULL;
+		g_autoptr(GBytes) blob_img = NULL;
+
+		/* use suitable filename */
+		if (fu_firmware_image_get_filename (img) != NULL) {
+			fn = g_strdup (fu_firmware_image_get_filename (img));
+		} else if (fu_firmware_image_get_id (img) != NULL) {
+			fn = g_strdup_printf ("id-%s.fw", fu_firmware_image_get_id (img));
+		} else if (fu_firmware_image_get_idx (img) != 0x0) {
+			fn = g_strdup_printf ("idx-0x%x.fw", (guint) fu_firmware_image_get_idx (img));
+		} else {
+			fn = g_strdup_printf ("img-0x%x.fw", i);
+		}
+		/* TRANSLATORS: decompressing images from a container firmware */
+		g_print ("%s : %s\n", _("Writing file:"), fn);
+		blob_img = fu_firmware_image_write (img, error);
+		if (blob_img == NULL)
+			return FALSE;
+		if (!fu_common_set_contents_bytes (fn, blob_img, error))
+			return FALSE;
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static FuFirmware *
+fu_util_firmware_builder_new (FuUtilPrivate *priv, GBytes *fw, GError **error)
+{
+	const gchar *tmp;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(XbBuilder) builder = xb_builder_new ();
+	g_autoptr(XbBuilderSource) source = xb_builder_source_new ();
+	g_autoptr(XbNode) n = NULL;
+	g_autoptr(XbSilo) silo = NULL;
+
+	/* parse XML */
+	if (!xb_builder_source_load_bytes (source, fw,
+					   XB_BUILDER_SOURCE_FLAG_NONE,
+					   error)) {
+		g_prefix_error (error, "could not parse XML: ");
+		return NULL;
+	}
+	xb_builder_import_source (builder, source);
+	silo = xb_builder_compile (builder, XB_BUILDER_COMPILE_FLAG_NONE, NULL, error);
+	if (silo == NULL)
+		return NULL;
+
+	/* create FuFirmware of specific GType */
+	n = xb_silo_query_first (silo, "firmware", error);
+	if (n == NULL)
+		return FALSE;
+	tmp = xb_node_get_attr (n, "gtype");
+	if (tmp != NULL) {
+		GType gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, tmp);
+		if (gtype == G_TYPE_INVALID) {
+			g_set_error (error,
+				     G_IO_ERROR,
+				     G_IO_ERROR_NOT_FOUND,
+				     "GType %s not supported", tmp);
+			return NULL;
+		}
+		firmware = g_object_new (gtype, NULL);
+	} else {
+		firmware = fu_firmware_new ();
+	}
+	if (!fu_firmware_build (firmware, n, error))
+		return NULL;
+
+	/* success */
+	return g_steal_pointer (&firmware);
 }
 
 static gboolean
@@ -1725,20 +1944,29 @@ fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 
 	/* find the GType to use */
 	if (firmware_type_src == NULL)
-		firmware_type_src = fu_util_prompt_for_firmware_type (priv, error);
+		firmware_type_src = fu_util_prompt_for_firmware_type (priv, TRUE, error);
 	if (firmware_type_src == NULL)
 		return FALSE;
 	if (firmware_type_dst == NULL)
-		firmware_type_dst = fu_util_prompt_for_firmware_type (priv, error);
+		firmware_type_dst = fu_util_prompt_for_firmware_type (priv, FALSE, error);
 	if (firmware_type_dst == NULL)
 		return FALSE;
-	gtype_src = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type_src);
-	if (gtype_src == G_TYPE_INVALID) {
-		g_set_error (error,
-			     G_IO_ERROR,
-			     G_IO_ERROR_NOT_FOUND,
-			     "GType %s not supported", firmware_type_src);
-		return FALSE;
+	if (g_strcmp0 (firmware_type_src, "builder") == 0) {
+		firmware_src = fu_util_firmware_builder_new (priv, blob_src, error);
+		if (firmware_src == NULL)
+			return FALSE;
+	} else {
+		gtype_src = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type_src);
+		if (gtype_src == G_TYPE_INVALID) {
+			g_set_error (error,
+				     G_IO_ERROR,
+				     G_IO_ERROR_NOT_FOUND,
+				     "GType %s not supported", firmware_type_src);
+			return FALSE;
+		}
+		firmware_src = g_object_new (gtype_src, NULL);
+		if (!fu_firmware_parse (firmware_src, blob_src, priv->flags, error))
+			return FALSE;
 	}
 	gtype_dst = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type_dst);
 	if (gtype_dst == G_TYPE_INVALID) {
@@ -1748,9 +1976,6 @@ fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 			     "GType %s not supported", firmware_type_dst);
 		return FALSE;
 	}
-	firmware_src = g_object_new (gtype_src, NULL);
-	if (!fu_firmware_parse (firmware_src, blob_src, priv->flags, error))
-		return FALSE;
 	str_src = fu_firmware_to_string (firmware_src);
 	g_print ("%s", str_src);
 
@@ -1892,10 +2117,11 @@ fu_util_refresh_remote (FuUtilPrivate *priv, FwupdRemote *remote, GError **error
 	/* payload */
 	metadata_uri = fwupd_remote_get_metadata_uri (remote);
 	if (metadata_uri == NULL) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOTHING_TO_DO,
-				     "no metadata URI available");
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOTHING_TO_DO,
+			     "no metadata URI available for %s",
+			     fwupd_remote_get_id (remote));
 		return FALSE;
 	}
 	fn_raw = fu_util_get_user_cache_path (metadata_uri);
@@ -1910,10 +2136,11 @@ fu_util_refresh_remote (FuUtilPrivate *priv, FwupdRemote *remote, GError **error
 	/* signature */
 	metadata_uri = fwupd_remote_get_metadata_uri_sig (remote);
 	if (metadata_uri == NULL) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOTHING_TO_DO,
-				     "no metadata signature URI available");
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOTHING_TO_DO,
+			     "no metadata signature URI available for %s",
+			     fwupd_remote_get_id (remote));
 		return FALSE;
 	}
 	fn_sig = fu_util_get_user_cache_path (metadata_uri);
@@ -1993,6 +2220,7 @@ fu_util_get_remotes (FuUtilPrivate *priv, gchar **values, GError **error)
 static gboolean
 fu_util_security (FuUtilPrivate *priv, gchar **values, GError **error)
 {
+	FuSecurityAttrToStringFlags flags = FU_SECURITY_ATTR_TO_STRING_FLAG_NONE;
 	g_autoptr(FuSecurityAttrs) attrs = NULL;
 	g_autoptr(GPtrArray) items = NULL;
 	g_autofree gchar *str = NULL;
@@ -2014,10 +2242,16 @@ fu_util_security (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_print ("%s \033[1m%s\033[0m\n", _("Host Security ID:"),
 		 fu_engine_get_host_security_id (priv->engine));
 
+	/* show or hide different elements */
+	if (priv->show_all) {
+		flags |= FU_SECURITY_ATTR_TO_STRING_FLAG_SHOW_OBSOLETES;
+		flags |= FU_SECURITY_ATTR_TO_STRING_FLAG_SHOW_URLS;
+	}
+
 	/* print the "why" */
 	attrs = fu_engine_get_host_security_attrs (priv->engine);
 	items = fu_security_attrs_get_all (attrs);
-	str = fu_util_security_attrs_to_string (items);
+	str = fu_util_security_attrs_to_string (items, flags);
 	g_print ("%s\n", str);
 	return TRUE;
 }
@@ -2031,6 +2265,8 @@ fu_util_prompt_for_volume (GError **error)
 
 	/* exactly one */
 	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
+	if (volumes == NULL)
+		return NULL;
 	if (volumes->len == 1) {
 		volume = g_ptr_array_index (volumes, 0);
 		/* TRANSLATORS: Volume has been chosen by the user */
@@ -2138,10 +2374,16 @@ main (int argc, char *argv[])
 		{ "no-safety-check", '\0', 0, G_OPTION_ARG_NONE, &priv->no_safety_check,
 			/* TRANSLATORS: command line option */
 			_("Do not perform device safety checks"), NULL },
-		{ "show-all-devices", '\0', 0, G_OPTION_ARG_NONE, &priv->show_all_devices,
+		{ "show-all", '\0', 0, G_OPTION_ARG_NONE, &priv->show_all,
+			/* TRANSLATORS: command line option */
+			_("Show all results"), NULL },
+		{ "show-all-devices", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &priv->show_all,
 			/* TRANSLATORS: command line option */
 			_("Show devices that are not updatable"), NULL },
 		{ "plugins", '\0', 0, G_OPTION_ARG_STRING_ARRAY, &plugin_glob,
+			/* TRANSLATORS: command line option */
+			_("Manually enable specific plugins"), NULL },
+		{ "plugin-whitelist", '\0', G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_STRING_ARRAY, &plugin_glob,
 			/* TRANSLATORS: command line option */
 			_("Manually enable specific plugins"), NULL },
 		{ "prepare", '\0', 0, G_OPTION_ARG_NONE, &priv->prepare_blob,
@@ -2272,6 +2514,18 @@ main (int argc, char *argv[])
 		     _("Detach to bootloader mode"),
 		     fu_util_detach);
 	fu_util_cmd_array_add (cmd_array,
+		     "unbind-driver",
+		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command description */
+		     _("Unbind current driver"),
+		     fu_util_unbind_driver);
+	fu_util_cmd_array_add (cmd_array,
+		     "bind-driver",
+		     "subsystem driver [DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command description */
+		     _("Bind new kernel driver"),
+		     fu_util_bind_driver);
+	fu_util_cmd_array_add (cmd_array,
 		     "activate",
 		     "[DEVICE-ID|GUID]",
 		     /* TRANSLATORS: command description */
@@ -2326,6 +2580,12 @@ main (int argc, char *argv[])
 		     /* TRANSLATORS: command description */
 		     _("Parse and show details about a firmware file"),
 		     fu_util_firmware_parse);
+	fu_util_cmd_array_add (cmd_array,
+		     "firmware-extract",
+		     "FILENAME [FIRMWARE-TYPE]",
+		     /* TRANSLATORS: command description */
+		     _("Extract a firmware blob to images"),
+		     fu_util_firmware_extract);
 	fu_util_cmd_array_add (cmd_array,
 		     "get-firmware-types",
 		     NULL,

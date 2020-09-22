@@ -23,6 +23,21 @@
 #define BULK_RECV_TIMEOUT_MS		5000
 
 #define UPDATE_DONE			0xB007AB1E
+#define UPDATE_EXTRA_CMD		0xB007AB1F
+
+enum update_extra_command {
+        UPDATE_EXTRA_CMD_IMMEDIATE_RESET = 0,
+        UPDATE_EXTRA_CMD_JUMP_TO_RW = 1,
+        UPDATE_EXTRA_CMD_STAY_IN_RO = 2,
+        UPDATE_EXTRA_CMD_UNLOCK_RW = 3,
+        UPDATE_EXTRA_CMD_UNLOCK_ROLLBACK = 4,
+        UPDATE_EXTRA_CMD_INJECT_ENTROPY = 5,
+        UPDATE_EXTRA_CMD_PAIR_CHALLENGE = 6,
+        UPDATE_EXTRA_CMD_TOUCHPAD_INFO = 7,
+        UPDATE_EXTRA_CMD_TOUCHPAD_DEBUG = 8,
+        UPDATE_EXTRA_CMD_CONSOLE_READ_INIT = 9,
+        UPDATE_EXTRA_CMD_CONSOLE_READ_NEXT = 10,
+};
 
 struct _FuCrosEcUsbDevice {
 	FuUsbDevice			parent_instance;
@@ -34,7 +49,10 @@ struct _FuCrosEcUsbDevice {
 	guint32				writeable_offset;
 	guint16				protocol_version;
 	guint16				header_type;
-	struct cros_ec_version		version;
+	struct cros_ec_version		version;	/* version of other region */
+	struct cros_ec_version		active_version; /* version of active region */
+	gchar 				configuration[FU_CROS_EC_STRLEN];
+	gboolean			in_bootloader;
 };
 
 G_DEFINE_TYPE (FuCrosEcUsbDevice, fu_cros_ec_usb_device, FU_TYPE_USB_DEVICE)
@@ -50,6 +68,41 @@ typedef struct {
 	gsize offset;
 	gsize payload_size;
 } FuCrosEcUsbBlockInfo;
+
+static gboolean
+fu_cros_ec_usb_device_get_configuration (FuCrosEcUsbDevice *self,
+					 GError **error)
+{
+	GUsbDevice *usb_device = fu_usb_device_get_dev (FU_USB_DEVICE (self));
+	guint8 index;
+	g_autofree gchar *configuration = NULL;
+
+#if G_USB_CHECK_VERSION(0,3,5)
+	index = g_usb_device_get_configuration_index (usb_device);
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "this version of GUsb is not supported");
+	return FALSE;
+#endif
+	configuration = g_usb_device_get_string_descriptor (usb_device,
+							    index,
+							    error);
+	if (configuration == NULL)
+		return FALSE;
+
+	if (g_strlcpy (self->configuration, configuration, FU_CROS_EC_STRLEN) == 0) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INTERNAL,
+				     "empty iConfiguration");
+		return FALSE;
+	}
+
+	/* success */
+	return TRUE;
+}
 
 static gboolean
 fu_cros_ec_usb_device_find_interface (FuUsbDevice *device,
@@ -211,6 +264,44 @@ fu_cros_ec_usb_device_flush (FuDevice *device, gpointer user_data,
 	return TRUE;
 }
 
+/*
+ * Channel TPM extension/vendor command over USB. The payload of the USB frame
+ * in this case consists of the 2 byte subcommand code concatenated with the
+ * command body. The caller needs to indicate if a response is expected, and
+ * if it is - of what maximum size.
+ */
+static gboolean
+fu_cros_ec_usb_ext_cmd (FuDevice *device, guint16 subcommand,
+			gpointer cmd_body, gsize body_size,
+			gpointer resp, gsize *resp_size,
+			gboolean allow_less, GError **error)
+{
+	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
+	guint16 *frame_ptr;
+	gsize usb_msg_size = sizeof (struct update_frame_header) +
+			     sizeof (subcommand) + body_size;
+	g_autofree struct update_frame_header *ufh = g_malloc0 (usb_msg_size);
+
+	ufh->block_size = GUINT32_TO_BE (usb_msg_size);
+	ufh->cmd.block_digest = 0;
+	ufh->cmd.block_base = GUINT32_TO_BE (UPDATE_EXTRA_CMD);
+	frame_ptr = (guint16 *)(ufh + 1);
+	*frame_ptr = GUINT16_TO_BE (subcommand);
+
+	if (body_size != 0) {
+		gsize offset =  sizeof (struct update_frame_header) + sizeof (subcommand);
+		if (!fu_memcpy_safe ((guint8 *) ufh, usb_msg_size, offset,
+				     (const guint8 *) cmd_body, body_size,
+				     0x0, body_size, error))
+			return FALSE;
+	}
+
+	return fu_cros_ec_usb_device_do_xfer (self, (guint8 *)ufh, usb_msg_size,
+					      (guint8 *)resp,
+					      resp_size != NULL ? *resp_size : 0,
+					      TRUE, NULL, error);
+}
+
 static gboolean
 fu_cros_ec_usb_device_start_request (FuDevice *device, gpointer user_data,
 				     GError **error)
@@ -248,6 +339,7 @@ fu_cros_ec_usb_device_setup (FuDevice *device, GError **error)
 	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
 	guint32 error_code;
 	START_RESP start_resp;
+	g_auto(GStrv) config_split = NULL;
 
 	/* flush all data from endpoint to recover in case of error */
 	if (!fu_device_retry (device, fu_cros_ec_usb_device_flush,
@@ -298,6 +390,32 @@ fu_cros_ec_usb_device_setup (FuDevice *device, GError **error)
 	self->targ.common.min_rollback = GINT32_FROM_BE (start_resp.rpdu.common.min_rollback);
 	self->targ.common.key_version = GUINT32_FROM_BE (start_resp.rpdu.common.key_version);
 
+	/* get active version string and running region from iConfiguration */
+	if (!fu_cros_ec_usb_device_get_configuration (self, error))
+		return FALSE;
+	config_split = g_strsplit (self->configuration, ":", 2);
+	if (g_strv_length (config_split) < 2) {
+		/* no prefix found so fall back to offset */
+		self->in_bootloader = self->writeable_offset != 0x0;
+		if (!fu_cros_ec_parse_version (self->configuration,
+					       &self->active_version, error)) {
+			g_prefix_error (error,
+					"failed parsing device's version: %32s: ",
+					self->configuration);
+			return FALSE;
+		}
+	} else {
+		self->in_bootloader = g_strcmp0 ("RO", config_split[0]) == 0;
+		if (!fu_cros_ec_parse_version (config_split[1],
+					       &self->active_version, error)) {
+			g_prefix_error (error,
+					"failed parsing device's version: %32s: ",
+					config_split[1]);
+			return FALSE;
+		}
+	}
+
+	/* get the other region's version string from targ */
 	if (!fu_cros_ec_parse_version (self->targ.common.version,
 				       &self->version, error)) {
 		g_prefix_error (error,
@@ -306,7 +424,17 @@ fu_cros_ec_usb_device_setup (FuDevice *device, GError **error)
 		return FALSE;
 	}
 
-	fu_device_set_version (FU_DEVICE (device), self->version.triplet);
+	if (self->in_bootloader) {
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
+		fu_device_set_version (FU_DEVICE (device), self->version.triplet);
+		fu_device_set_version_bootloader (FU_DEVICE (device),
+						  self->active_version.triplet);
+	} else {
+		fu_device_remove_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
+		fu_device_set_version (FU_DEVICE (device), self->active_version.triplet);
+		fu_device_set_version_bootloader (FU_DEVICE (device),
+						  self->version.triplet);
+	}
 	fu_device_add_instance_id (FU_DEVICE (device), self->version.boardname);
 
 	/* success */
@@ -489,11 +617,79 @@ fu_cros_ec_usb_device_send_done (FuDevice *device)
 }
 
 static gboolean
+fu_cros_ec_usb_device_send_subcommand (FuDevice *device, guint16 subcommand,
+				       gpointer cmd_body, gsize body_size,
+				       gpointer resp, gsize *resp_size,
+				       gboolean allow_less, GError **error)
+{
+	fu_cros_ec_usb_device_send_done (device);
+
+	if (!fu_cros_ec_usb_ext_cmd (device, subcommand,
+				     cmd_body, body_size,
+				     resp, resp_size, FALSE, error)) {
+		g_prefix_error (error,
+				"failed to send subcommand %" G_GUINT16_FORMAT ": ",
+				subcommand);
+		return FALSE;
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_cros_ec_usb_device_reset_to_ro (FuDevice *device, GError **error)
+{
+	guint8 response;
+	guint16 subcommand = UPDATE_EXTRA_CMD_STAY_IN_RO;
+	guint8 command_body[2]; /* Max command body size. */
+	gsize command_body_size = 0;
+	gsize response_size = 1;
+
+	/* send subcommand to remain in RO */
+	if (!fu_cros_ec_usb_device_send_subcommand (device, subcommand, command_body,
+				     command_body_size, &response,
+				     &response_size, FALSE, error))
+		return FALSE;
+
+	response_size = 1;
+	subcommand = UPDATE_EXTRA_CMD_IMMEDIATE_RESET;
+	if (!fu_cros_ec_usb_device_send_subcommand  (device, subcommand, command_body,
+				     command_body_size, &response,
+				     &response_size, FALSE, error)) {
+		/* failure here is ok */
+		g_clear_error (error);
+		return TRUE;
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_cros_ec_usb_device_jump_to_rw (FuDevice *device)
+{
+	guint8 response;
+	guint16 subcommand = UPDATE_EXTRA_CMD_JUMP_TO_RW;
+	guint8 command_body[2]; /* Max command body size. */
+	gsize command_body_size = 0;
+	gsize response_size = 1;
+
+	fu_cros_ec_usb_device_send_subcommand  (device, subcommand, command_body,
+						command_body_size, &response,
+						&response_size, FALSE, NULL);
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
 fu_cros_ec_usb_device_write_firmware (FuDevice *device,
 				      FuFirmware *firmware,
 				      FwupdInstallFlags flags,
 				      GError **error)
 {
+	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
 	GPtrArray *sections;
 	FuCrosEcFirmware *cros_ec_firmware = FU_CROS_EC_FIRMWARE (firmware);
 	gint num_txed_sections = 0;
@@ -519,6 +715,14 @@ fu_cros_ec_usb_device_write_firmware (FuDevice *device,
 				return FALSE;
 			}
 			num_txed_sections++;
+
+			if (self->in_bootloader) {
+				fu_device_set_version (FU_DEVICE (device),
+						       section->version.triplet);
+			} else {
+				fu_device_set_version_bootloader (FU_DEVICE (device),
+								  section->version.triplet);
+			}
 		}
 	}
 	/* send done */
@@ -532,6 +736,16 @@ fu_cros_ec_usb_device_write_firmware (FuDevice *device,
 		return FALSE;
 	}
 
+	if (self->in_bootloader)
+		fu_device_set_custom_flags (device, "rw-written");
+	else if (fu_device_has_custom_flag (device, "rw-written"))
+		fu_device_set_custom_flags (device, "ro-written,rw-written");
+	else
+		fu_device_set_custom_flags (device, "ro-written");
+
+	if (fu_device_has_custom_flag (device, "rw-written") &&
+	    !fu_device_has_custom_flag (device, "ro-written"))
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_ANOTHER_WRITE_REQUIRED);
 	/* success */
 	return TRUE;
 }
@@ -563,7 +777,6 @@ fu_cros_ec_usb_device_prepare_firmware (FuDevice *device,
 	FuCrosEcFirmware *cros_ec_firmware = NULL;
 	g_autoptr(FuFirmware) firmware = fu_cros_ec_firmware_new ();
 
-	fu_device_set_status (device, FWUPD_STATUS_DECOMPRESSING);
 	if (!fu_firmware_parse (firmware, fw, flags, error))
 		return NULL;
 	cros_ec_firmware = FU_CROS_EC_FIRMWARE (firmware);
@@ -578,11 +791,51 @@ fu_cros_ec_usb_device_prepare_firmware (FuDevice *device,
 	return g_steal_pointer (&firmware);
 }
 
+static gboolean
+fu_cros_ec_usb_device_attach (FuDevice *device, GError **error)
+{
+	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
+
+	if (!self->in_bootloader) {
+		/* already in rw, so skip jump to rw */
+		return TRUE;
+	}
+
+	fu_device_set_remove_delay (device, FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
+	fu_cros_ec_usb_device_jump_to_rw (device);
+
+	fu_device_set_status (device, FWUPD_STATUS_DEVICE_RESTART);
+	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_cros_ec_usb_device_detach (FuDevice *self, GError **error)
+{
+	if (fu_device_has_custom_flag (self, "rw-written") &&
+	    !fu_device_has_custom_flag (self, "ro-written"))
+		return TRUE;
+
+	fu_device_set_remove_delay (self, FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
+	if (!fu_cros_ec_usb_device_reset_to_ro (self, error))
+		return FALSE;
+
+	fu_device_set_status (self, FWUPD_STATUS_DEVICE_RESTART);
+	fu_device_add_flag (self, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
+
+	/* success */
+	return TRUE;
+}
+
 static void
 fu_cros_ec_usb_device_init (FuCrosEcUsbDevice *device)
 {
 	fu_device_set_protocol (FU_DEVICE (device), "com.google.usb.crosec");
+	fu_device_add_flag (FU_DEVICE (device), FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_set_version_format (FU_DEVICE (device), FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_add_flag (FU_DEVICE (device), FWUPD_DEVICE_FLAG_DUAL_IMAGE);
 }
 
 static void
@@ -618,6 +871,8 @@ fu_cros_ec_usb_device_class_init (FuCrosEcUsbDeviceClass *klass)
 {
 	FuDeviceClass *klass_device = FU_DEVICE_CLASS (klass);
 	FuUsbDeviceClass *klass_usb_device = FU_USB_DEVICE_CLASS (klass);
+	klass_device->attach = fu_cros_ec_usb_device_attach;
+	klass_device->detach = fu_cros_ec_usb_device_detach;
 	klass_device->prepare_firmware = fu_cros_ec_usb_device_prepare_firmware;
 	klass_device->setup = fu_cros_ec_usb_device_setup;
 	klass_device->to_string = fu_cros_ec_usb_device_to_string;

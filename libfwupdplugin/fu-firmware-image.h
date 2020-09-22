@@ -8,6 +8,7 @@
 
 #include <glib-object.h>
 #include <fwupd.h>
+#include <xmlb.h>
 
 #define FU_TYPE_FIRMWARE_IMAGE (fu_firmware_image_get_type ())
 G_DECLARE_DERIVABLE_TYPE (FuFirmwareImage, fu_firmware_image, FU, FIRMWARE_IMAGE, GObject)
@@ -38,6 +39,9 @@ gchar		*fu_firmware_image_to_string	(FuFirmwareImage	*self);
 const gchar	*fu_firmware_image_get_version	(FuFirmwareImage	*self);
 void		 fu_firmware_image_set_version	(FuFirmwareImage	*self,
 						 const gchar		*version);
+const gchar	*fu_firmware_image_get_filename	(FuFirmwareImage	*self);
+void		 fu_firmware_image_set_filename	(FuFirmwareImage	*self,
+						 const gchar		*filename);
 const gchar	*fu_firmware_image_get_id	(FuFirmwareImage	*self);
 void		 fu_firmware_image_set_id	(FuFirmwareImage	*self,
 						 const gchar		*id);
@@ -49,6 +53,13 @@ void		 fu_firmware_image_set_idx	(FuFirmwareImage	*self,
 						 guint64		 idx);
 void		 fu_firmware_image_set_bytes	(FuFirmwareImage	*self,
 						 GBytes			*bytes);
+gboolean	 fu_firmware_image_parse	(FuFirmwareImage	*self,
+						 GBytes			*fw,
+						 FwupdInstallFlags	 flags,
+						 GError			**error);
+gboolean	 fu_firmware_image_build	(FuFirmwareImage	*self,
+						 XbNode			*n,
+						 GError			**error);
 GBytes		*fu_firmware_image_write	(FuFirmwareImage	*self,
 						 GError			**error);
 GBytes		*fu_firmware_image_write_chunk	(FuFirmwareImage	*self,

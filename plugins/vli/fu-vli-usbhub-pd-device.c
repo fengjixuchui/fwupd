@@ -104,28 +104,7 @@ fu_vli_usbhub_pd_device_prepare_firmware (FuDevice *device,
 	FuVliDeviceKind device_kind;
 	g_autoptr(FuFirmware) firmware = fu_vli_pd_firmware_new ();
 
-	/* check size */
-	if (g_bytes_get_size (fw) < fu_device_get_firmware_size_min (device)) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_INVALID_FILE,
-			     "firmware too small, got 0x%x, expected >= 0x%x",
-			     (guint) g_bytes_get_size (fw),
-			     (guint) fu_device_get_firmware_size_min (device));
-		return NULL;
-	}
-	if (g_bytes_get_size (fw) > fu_device_get_firmware_size_max (device)) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_INVALID_FILE,
-			     "firmware too large, got 0x%x, expected <= 0x%x",
-			     (guint) g_bytes_get_size (fw),
-			     (guint) fu_device_get_firmware_size_max (device));
-		return NULL;
-	}
-
 	/* check is compatible with firmware */
-	fu_device_set_status (device, FWUPD_STATUS_DECOMPRESSING);
 	if (!fu_firmware_parse (firmware, fw, flags, error))
 		return NULL;
 	device_kind = fu_vli_pd_firmware_get_kind (FU_VLI_PD_FIRMWARE (firmware));
@@ -228,6 +207,7 @@ fu_vli_usbhub_pd_device_init (FuVliUsbhubPdDevice *self)
 	fu_device_set_protocol (FU_DEVICE (self), "com.vli.usbhub");
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_CAN_VERIFY_IMAGE);
+	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_NO_GUID_MATCHING);
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_QUAD);
 	fu_device_set_install_duration (FU_DEVICE (self), 15); /* seconds */
 	fu_device_set_logical_id (FU_DEVICE (self), "PD");

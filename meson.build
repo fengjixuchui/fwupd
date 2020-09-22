@@ -171,10 +171,14 @@ if host_machine.system() == 'windows'
   sysconfdir = get_option('sysconfdir')
   localstatedir = get_option('localstatedir')
   datadir = get_option('datadir')
+  installed_test_bindir = get_option('libexecdir')
+  installed_test_datadir = get_option('datadir')
 else
   datadir = join_paths(prefix, get_option('datadir'))
   sysconfdir = join_paths(prefix, get_option('sysconfdir'))
   localstatedir = join_paths(prefix, get_option('localstatedir'))
+  installed_test_bindir = join_paths(libexecdir, 'installed-tests', meson.project_name())
+  installed_test_datadir = join_paths(datadir, 'installed-tests', meson.project_name())
 endif
 mandir = join_paths(prefix, get_option('mandir'))
 localedir = join_paths(prefix, get_option('localedir'))
@@ -197,7 +201,7 @@ else
   gudev = dependency('', required : false)
 endif
 libxmlb = dependency('xmlb', version : '>= 0.1.13', fallback : ['libxmlb', 'libxmlb_dep'])
-gusb = dependency('gusb', version : '>= 0.3.3', fallback : ['gusb', 'gusb_dep'])
+gusb = dependency('gusb', version : '>= 0.3.5', fallback : ['gusb', 'gusb_dep'])
 sqlite = dependency('sqlite3')
 libarchive = dependency('libarchive')
 endif
@@ -222,10 +226,6 @@ libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gca
 gcab = find_program('gcab', required : true)
 bashcomp = dependency('bash-completion', required: false)
 python3 = find_program('python3')
-tpm2tss = dependency('tss2-esys', version : '>= 2.0', required: false)
-if tpm2tss.found()
-  conf.set('HAVE_TSS2', '1')
-endif
 
 platform_deps = []
 if get_option('default_library') != 'static'
@@ -286,8 +286,11 @@ if cc.has_function('pwrite', args : '-D_XOPEN_SOURCE')
   conf.set('HAVE_PWRITE', '1')
 endif
 
-if build_standalone and get_option('plugin_tpm') and not tpm2tss.found()
-  error('tss2-esys is required for -Dplugin_tpm=true')
+if build_standalone and get_option('tpm')
+  tpm2tss = dependency('tss2-esys', version : '>= 2.0')
+  conf.set('HAVE_TSS2', '1')
+else
+  tpm2tss = dependency('', required: false)
 endif
 
 if build_standalone and get_option('plugin_uefi')
@@ -374,7 +377,7 @@ if build_standalone and get_option('systemd')
   else
     systemdunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir', define_variable: ['rootprefix', systemd_root_prefix])
     systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir', define_variable: ['rootprefix', systemd_root_prefix])
-    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: ['rootprefix', systemd_root_prefix])
+    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: [systemd.version().version_compare('>= 246') ? 'root_prefix' : 'rootprefix', systemd_root_prefix])
   endif
 endif
 

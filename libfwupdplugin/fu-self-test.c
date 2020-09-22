@@ -119,11 +119,11 @@ fu_common_string_append_kv_func (void)
 	fu_common_string_append_kv (str, 2, "key3", "value3");
 	g_assert_cmpstr (str->str, ==,
 			 "hdr:\n"
-			 "key:                     value\n"
-			 "key1:                    value1\n"
-			 "  key2:                  value2\n"
-			 "                         value2\n"
-			 "    key3:                value3\n");
+			 "key:                    value\n"
+			 "key1:                   value1\n"
+			 "  key2:                 value2\n"
+			 "                        value2\n"
+			 "    key3:               value3\n");
 }
 
 static void
@@ -1540,6 +1540,75 @@ fu_firmware_srec_tokenization_func (void)
 }
 
 static void
+fu_firmware_build_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *str = NULL;
+	g_autoptr(FuFirmware) firmware = fu_firmware_new ();
+	g_autoptr(FuFirmwareImage) img = NULL;
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GBytes) blob2 = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(XbBuilder) builder = xb_builder_new ();
+	g_autoptr(XbBuilderSource) source = xb_builder_source_new ();
+	g_autoptr(XbNode) n = NULL;
+	g_autoptr(XbSilo) silo = NULL;
+	const gchar *buf =
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		"<firmware>\n"
+		"  <version>1.2.3</version>\n"
+		"  <image>\n"
+		"    <version>4.5.6</version>\n"
+		"    <id>header</id>\n"
+		"    <idx>456</idx>\n"
+		"    <addr>0x456</addr>\n"
+		"    <data>aGVsbG8=</data>\n"
+		"  </image>\n"
+		"  <image>\n"
+		"    <version>7.8.9</version>\n"
+		"    <id>header</id>\n"
+		"    <idx>789</idx>\n"
+		"    <addr>0x789</addr>\n"
+		"  </image>\n"
+		"</firmware>\n";
+	blob = g_bytes_new_static (buf, strlen (buf));
+	g_assert_no_error (error);
+	g_assert_nonnull (blob);
+
+	/* parse XML */
+	ret = xb_builder_source_load_bytes (source, blob, XB_BUILDER_SOURCE_FLAG_NONE, &error);
+	g_assert_no_error (error);
+	g_assert (ret);
+	xb_builder_import_source (builder, source);
+	silo = xb_builder_compile (builder, XB_BUILDER_COMPILE_FLAG_NONE, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (silo);
+	n = xb_silo_query_first (silo, "firmware", &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (n);
+
+	/* build object */
+	ret = fu_firmware_build (firmware, n, &error);
+	g_assert_no_error (error);
+	g_assert (ret);
+	g_assert_cmpstr (fu_firmware_get_version (firmware), ==, "1.2.3");
+
+	/* verify image */
+	img = fu_firmware_get_image_by_id (firmware, "header", &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (img);
+	g_assert_cmpstr (fu_firmware_image_get_version (img), ==, "4.5.6");
+	g_assert_cmpint (fu_firmware_image_get_idx (img), ==, 456);
+	g_assert_cmpint (fu_firmware_image_get_addr (img), ==, 0x456);
+	blob2 = fu_firmware_image_write (img, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (blob2);
+	g_assert_cmpint (g_bytes_get_size (blob2), ==, 5);
+	str = g_strndup (g_bytes_get_data (blob2, NULL), g_bytes_get_size (blob2));
+	g_assert_cmpstr (str, ==, "hello");
+}
+
+static void
 fu_firmware_dfu_func (void)
 {
 	gboolean ret;
@@ -1594,6 +1663,7 @@ fu_firmware_func (void)
 	fu_firmware_image_set_addr (img1, 0x200);
 	fu_firmware_image_set_idx (img1, 13);
 	fu_firmware_image_set_id (img1, "primary");
+	fu_firmware_image_set_filename (img1, "BIOS.bin");
 	fu_firmware_add_image (firmware, img1);
 	fu_firmware_image_set_addr (img2, 0x400);
 	fu_firmware_image_set_idx (img2, 23);
@@ -1625,13 +1695,59 @@ fu_firmware_func (void)
 	str = fu_firmware_to_string (firmware);
 	g_assert_cmpstr (str, ==, "FuFirmware:\n"
 				  "  FuFirmwareImage:\n"
-				  "  ID:                    primary\n"
-				  "  Index:                 0xd\n"
-				  "  Address:               0x200\n"
+				  "  ID:                   primary\n"
+				  "  Index:                0xd\n"
+				  "  Address:              0x200\n"
+				  "  Filename:             BIOS.bin\n"
 				  "  FuFirmwareImage:\n"
-				  "  ID:                    secondary\n"
-				  "  Index:                 0x17\n"
-				  "  Address:               0x400\n");
+				  "  ID:                   secondary\n"
+				  "  Index:                0x17\n"
+				  "  Address:              0x400\n");
+}
+
+static void
+fu_firmware_dedupe_func (void)
+{
+	g_autoptr(FuFirmware) firmware = fu_firmware_new ();
+	g_autoptr(FuFirmwareImage) img1 = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmwareImage) img1_old = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmwareImage) img2 = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmwareImage) img2_old = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmwareImage) img_id = NULL;
+	g_autoptr(FuFirmwareImage) img_idx = NULL;
+	g_autoptr(GError) error = NULL;
+
+	fu_firmware_add_flag (firmware, FU_FIRMWARE_FLAG_DEDUPE_ID);
+	fu_firmware_add_flag (firmware, FU_FIRMWARE_FLAG_DEDUPE_IDX);
+
+	fu_firmware_image_set_idx (img1_old, 13);
+	fu_firmware_image_set_id (img1_old, "DAVE");
+	fu_firmware_add_image (firmware, img1_old);
+
+	fu_firmware_image_set_idx (img1, 13);
+	fu_firmware_image_set_id (img1, "primary");
+	fu_firmware_add_image (firmware, img1);
+
+
+	fu_firmware_image_set_idx (img2_old, 123456);
+	fu_firmware_image_set_id (img2_old, "secondary");
+	fu_firmware_add_image (firmware, img2_old);
+
+	fu_firmware_image_set_idx (img2, 23);
+	fu_firmware_image_set_id (img2, "secondary");
+	fu_firmware_add_image (firmware, img2);
+
+	img_id = fu_firmware_get_image_by_id (firmware, "primary", &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (img_id);
+	g_assert_cmpint (fu_firmware_image_get_idx (img_id), ==, 13);
+	g_assert_cmpstr (fu_firmware_image_get_id (img_id), ==, "primary");
+
+	img_idx = fu_firmware_get_image_by_idx (firmware, 23, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (img_idx);
+	g_assert_cmpint (fu_firmware_image_get_idx (img_idx), ==, 23);
+	g_assert_cmpstr (fu_firmware_image_get_id (img_idx), ==, "secondary");
 }
 
 static void
@@ -1928,6 +2044,8 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/smbios", fu_smbios_func);
 	g_test_add_func ("/fwupd/smbios3", fu_smbios3_func);
 	g_test_add_func ("/fwupd/firmware", fu_firmware_func);
+	g_test_add_func ("/fwupd/firmware{dedupe}", fu_firmware_dedupe_func);
+	g_test_add_func ("/fwupd/firmware{build}", fu_firmware_build_func);
 	g_test_add_func ("/fwupd/firmware{ihex}", fu_firmware_ihex_func);
 	g_test_add_func ("/fwupd/firmware{ihex-offset}", fu_firmware_ihex_offset_func);
 	g_test_add_func ("/fwupd/firmware{ihex-signed}", fu_firmware_ihex_signed_func);

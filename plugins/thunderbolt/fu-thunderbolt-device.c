@@ -20,6 +20,7 @@
 #include "fu-thunderbolt-device.h"
 #include "fu-thunderbolt-firmware.h"
 #include "fu-thunderbolt-firmware-update.h"
+#include "fu-udev-device-private.h"
 
 typedef enum {
 	FU_THUNDERBOLT_DEVICE_TYPE_DEVICE_CONTROLLER,
@@ -110,6 +111,42 @@ fu_thunderbolt_device_read_status_block (FuThunderboltDevice *self, GError **err
 }
 
 static gboolean
+fu_thunderbolt_device_check_authorized (FuThunderboltDevice *self, GError **error)
+{
+	guint64 status;
+	g_autofree gchar *attribute = NULL;
+	const gchar *update_error = NULL;
+	/* read directly from file to prevent udev caching */
+	g_autofree gchar *safe_path = g_build_path ("/", self->devpath, "authorized", NULL);
+
+	if (!g_file_test (safe_path, G_FILE_TEST_EXISTS)) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "missing authorized attribute");
+		return FALSE;
+	}
+
+	if (!g_file_get_contents (safe_path, &attribute, NULL, error))
+		return FALSE;
+	status = g_ascii_strtoull (attribute, NULL, 16);
+	if (status == G_MAXUINT64 && errno == ERANGE) {
+		g_set_error (error, G_IO_ERROR,
+			     g_io_error_from_errno (errno),
+			     "failed to read 'authorized: %s",
+			     g_strerror (errno));
+		return FALSE;
+	}
+	if (status == 1)
+		fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
+	else
+		update_error = "Not authorized";
+	fu_device_set_update_error (FU_DEVICE (self), update_error);
+
+	return TRUE;
+}
+
+static gboolean
 fu_thunderbolt_device_can_update (FuThunderboltDevice *self)
 {
 	g_autoptr(GError) nvmem_error = NULL;
@@ -126,13 +163,21 @@ fu_thunderbolt_device_can_update (FuThunderboltDevice *self)
 }
 
 static gboolean
-fu_thunderbolt_device_get_version (FuThunderboltDevice *self)
+fu_thunderbolt_device_get_version (FuThunderboltDevice *self, GError **error)
 {
 	g_auto(GStrv) split = NULL;
 	g_autofree gchar *version_raw = NULL;
 	g_autofree gchar *version = NULL;
 	/* read directly from file to prevent udev caching */
 	g_autofree gchar *safe_path = g_build_path ("/", self->devpath, "nvm_version", NULL);
+
+	if (!g_file_test (safe_path, G_FILE_TEST_EXISTS)) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "missing nvm_version attribute");
+		return FALSE;
+	}
 
 	for (guint i = 0; i < 50; i++) {
 		g_autoptr(GError) error_local = NULL;
@@ -147,11 +192,21 @@ fu_thunderbolt_device_get_version (FuThunderboltDevice *self)
 			break;
 	}
 
-	if (version_raw == NULL)
+	if (version_raw == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INTERNAL,
+				     "failed to read NVM");
 		return FALSE;
+	}
 	split = g_strsplit (version_raw, ".", -1);
-	if (g_strv_length (split) != 2)
+	if (g_strv_length (split) != 2) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "invalid nvm_version format: %s", version_raw);
 		return FALSE;
+	}
 
 	version = g_strdup_printf ("%02x.%02x",
 				   (guint) g_ascii_strtoull (split[0], NULL, 16),
@@ -198,7 +253,7 @@ fu_thunderbolt_device_type_to_string (FuThunderboltDevice *self)
 }
 
 static void
-fu_thunderbolt_device_to_string (FuDevice *device, guint idt, GString *str)
+fu_thunderbolt_device_to_string (FuUdevDevice *device, guint idt, GString *str)
 {
 	FuThunderboltDevice *self = FU_THUNDERBOLT_DEVICE (device);
 	fu_common_string_append_kv (str, idt, "Device Type", fu_thunderbolt_device_type_to_string (self));
@@ -222,6 +277,9 @@ fu_thunderbolt_device_probe (FuUdevDevice *device, GError **error)
 	/* retimer */
 	} else if (g_strcmp0 (tmp, "thunderbolt_retimer") == 0) {
 		self->device_type = FU_THUNDERBOLT_DEVICE_TYPE_RETIMER;
+		tmp = g_path_get_basename (fu_udev_device_get_sysfs_path (FU_UDEV_DEVICE (device)));
+		if (tmp != NULL)
+			fu_device_set_physical_id (FU_DEVICE (device), tmp);
 	/* domain or unsupported */
 	} else {
 		g_set_error (error,
@@ -340,8 +398,12 @@ fu_thunderbolt_device_setup_controller (FuDevice *device, GError **error)
 						     (guint) vid,
 						     (guint) did,
 						     self->is_native ? "-native" : "");
-			fu_device_add_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE);
 			fu_device_add_flag (device, FWUPD_DEVICE_FLAG_DUAL_IMAGE);
+
+			/* check if device is authorized */
+			if (!fu_thunderbolt_device_check_authorized (self, error))
+				return FALSE;
+
 		} else {
 			device_id = g_strdup ("TBT-fixed");
 		}
@@ -359,6 +421,8 @@ fu_thunderbolt_device_setup_controller (FuDevice *device, GError **error)
 		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_USABLE_DURING_UPDATE);
 		/* forces the device to write to authenticate on disconnect attribute */
 		fu_device_remove_flag (device, FWUPD_DEVICE_FLAG_SKIPS_RESTART);
+		/* control the order of activation (less relevant; install too though) */
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_INSTALL_PARENT_FIRST);
 	}
 
 	return TRUE;
@@ -370,10 +434,8 @@ fu_thunderbolt_device_setup_retimer (FuDevice *device, GError **error)
 	FuThunderboltDevice *self = FU_THUNDERBOLT_DEVICE (device);
 	guint16 did;
 	guint16 vid;
-	g_autofree gchar *idx = g_path_get_basename (self->devpath);
 	g_autofree gchar *instance = NULL;
 
-	fu_device_set_physical_id (device, idx);
 	/* as defined in PCIe 4.0 spec */
 	fu_device_set_summary (device, "A physical layer protocol-aware, software-transparent extension device "
 				        "that forms two separate electrical link segments");
@@ -403,7 +465,7 @@ fu_thunderbolt_device_setup_retimer (FuDevice *device, GError **error)
 	instance = g_strdup_printf ("TBT-%04x%04x-retimer%s",
 				    (guint) vid,
 				    (guint) did,
-				    idx);
+				    fu_device_get_physical_id (device));
 	fu_device_add_instance_id (device, instance);
 
 	/* hardcoded for now:
@@ -420,13 +482,18 @@ static gboolean
 fu_thunderbolt_device_setup (FuDevice *device, GError **error)
 {
 	FuThunderboltDevice *self = FU_THUNDERBOLT_DEVICE (device);
+	g_autoptr(GError) error_version = NULL;
 
 	self->devpath = g_strdup (fu_udev_device_get_sysfs_path (FU_UDEV_DEVICE (device)));
-	fu_device_set_metadata (device, "sysfs-path", self->devpath);
 
 	/* try to read the version */
-	if (!fu_thunderbolt_device_get_version (self))
-		g_debug ("failed to read version");
+	if (!fu_thunderbolt_device_get_version (self, &error_version)) {
+		if (g_error_matches (error_version, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED)) {
+			g_propagate_error (error, g_steal_pointer (&error_version));
+			return FALSE;
+		}
+		g_debug ("%s", error_version->message);
+	}
 
 	/* default behavior */
 	self->auth_method = "nvm_authenticate";
@@ -435,6 +502,14 @@ fu_thunderbolt_device_setup (FuDevice *device, GError **error)
 	if (self->device_type == FU_THUNDERBOLT_DEVICE_TYPE_RETIMER)
 		return fu_thunderbolt_device_setup_retimer (device, error);
 	return fu_thunderbolt_device_setup_controller (device, error);
+}
+
+static gboolean
+fu_thunderbolt_device_activate (FuDevice *device, GError **error)
+{
+	FuUdevDevice *udev = FU_UDEV_DEVICE (device);
+
+	return fu_udev_device_write_sysfs (udev, "nvm_authenticate", "1", error);
 }
 
 static gboolean
@@ -492,8 +567,13 @@ static gboolean
 fu_thunderbolt_device_rescan (FuDevice *device, GError **error)
 {
 	FuThunderboltDevice *self = FU_THUNDERBOLT_DEVICE (device);
+
+	/* refresh updatability */
+	if (!fu_thunderbolt_device_check_authorized (self, error))
+		return FALSE;
+
 	/* refresh the version */
-	return fu_thunderbolt_device_get_version (self);
+	return fu_thunderbolt_device_get_version (self, error);
 }
 
 static gboolean
@@ -716,8 +796,8 @@ fu_thunderbolt_device_class_init (FuThunderboltDeviceClass *klass)
 	FuDeviceClass *klass_device = FU_DEVICE_CLASS (klass);
 	FuUdevDeviceClass *klass_udev_device = FU_UDEV_DEVICE_CLASS (klass);
 	object_class->finalize = fu_thunderbolt_device_finalize;
-	klass_device->activate = fu_thunderbolt_device_authenticate;
-	klass_device->to_string = fu_thunderbolt_device_to_string;
+	klass_device->activate = fu_thunderbolt_device_activate;
+	klass_udev_device->to_string = fu_thunderbolt_device_to_string;
 	klass_device->setup = fu_thunderbolt_device_setup;
 	klass_device->prepare_firmware = fu_thunderbolt_device_prepare_firmware;
 	klass_device->write_firmware = fu_thunderbolt_device_write_firmware;
