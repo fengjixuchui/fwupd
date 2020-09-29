@@ -195,10 +195,10 @@ fu_udev_device_set_device_file (FuUdevDevice *self, const gchar *device_file)
 	g_object_notify (G_OBJECT (self), "device-file");
 }
 
+#ifdef HAVE_GUDEV
 static const gchar *
 fu_udev_device_get_vendor_fallback (GUdevDevice *udev_device)
 {
-#ifdef HAVE_GUDEV
 	const gchar *tmp;
 	tmp = g_udev_device_get_property (udev_device, "ID_VENDOR_FROM_DATABASE");
 	if (tmp != NULL)
@@ -206,9 +206,9 @@ fu_udev_device_get_vendor_fallback (GUdevDevice *udev_device)
 	tmp = g_udev_device_get_property (udev_device, "ID_VENDOR");
 	if (tmp != NULL)
 		return tmp;
-#endif
 	return NULL;
 }
+#endif
 
 #ifdef HAVE_GUDEV
 static gboolean
@@ -260,6 +260,8 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 		priv->vendor = fu_udev_device_get_sysfs_attr_as_uint32 (udev_parent, "vendor");
 		priv->model = fu_udev_device_get_sysfs_attr_as_uint32 (udev_parent, "device");
 		priv->revision = fu_udev_device_get_sysfs_attr_as_uint8 (udev_parent, "revision");
+		priv->subsystem_vendor = fu_udev_device_get_sysfs_attr_as_uint32 (udev_parent, "subsystem_vendor");
+		priv->subsystem_model = fu_udev_device_get_sysfs_attr_as_uint32 (udev_parent, "subsystem_device");
 	}
 
 	/* hidraw helpfully encodes the information in a different place */
@@ -462,13 +464,28 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
 #ifdef HAVE_GUDEV
 	const gchar *summary;
-	g_autoptr(GUdevDevice) parent = NULL;
 #endif
 
 	g_return_if_fail (FU_IS_UDEV_DEVICE (self));
 
-	/* set new device */
+#ifdef HAVE_GUDEV
+	/* the net subsystem is not a real hardware class */
+	if (udev_device != NULL &&
+	    g_strcmp0 (g_udev_device_get_subsystem (udev_device), "net") == 0) {
+		g_autoptr(GUdevDevice) udev_device_phys = NULL;
+		udev_device_phys = g_udev_device_get_parent (udev_device);
+		g_set_object (&priv->udev_device, udev_device_phys);
+		fu_device_set_metadata (FU_DEVICE (self),
+					"ParentSubsystem",
+					g_udev_device_get_subsystem (udev_device));
+	} else {
+		g_set_object (&priv->udev_device, udev_device);
+	}
+#else
 	g_set_object (&priv->udev_device, udev_device);
+#endif
+
+	/* set new device */
 	if (priv->udev_device == NULL)
 		return;
 #ifdef HAVE_GUDEV
@@ -478,6 +495,7 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 	/* try to get one line summary */
 	summary = g_udev_device_get_sysfs_attr (priv->udev_device, "description");
 	if (summary == NULL) {
+		g_autoptr(GUdevDevice) parent = NULL;
 		parent = g_udev_device_get_parent (priv->udev_device);
 		if (parent != NULL)
 			summary = g_udev_device_get_sysfs_attr (parent, "description");
@@ -723,6 +741,29 @@ fu_udev_device_get_sysfs_path (FuUdevDevice *self)
 		return g_udev_device_get_sysfs_path (priv->udev_device);
 #endif
 	return NULL;
+}
+
+/**
+ * fu_udev_device_get_number:
+ * @self: A #FuUdevDevice
+ *
+ * Gets the device number, if any.
+ *
+ * Returns: integer, 0 if the data is unavailable, or %G_MAXUINT64 if the
+ * feature is not available
+ *
+ * Since: 1.5.0
+ **/
+guint64
+fu_udev_device_get_number (FuUdevDevice *self)
+{
+#ifdef HAVE_GUDEV
+	FuUdevDevicePrivate *priv = GET_PRIVATE (self);
+	g_return_val_if_fail (FU_IS_UDEV_DEVICE (self), 0);
+	if (priv->udev_device != NULL)
+		return fu_common_strtoull (g_udev_device_get_number (priv->udev_device));
+#endif
+	return G_MAXUINT64;
 }
 
 /**

@@ -613,9 +613,14 @@ LIBFWUPDPLUGIN_1.4.6 {
 LIBFWUPDPLUGIN_1.5.0 {
   global:
     fu_common_cpuid;
+    fu_common_crc16;
+    fu_common_crc32;
+    fu_common_crc32_full;
+    fu_common_crc8;
     fu_common_filename_glob;
     fu_common_is_cpu_intel;
     fu_device_bind_driver;
+    fu_device_dump_firmware;
     fu_device_report_metadata_post;
     fu_device_report_metadata_pre;
     fu_device_unbind_driver;
@@ -625,9 +630,15 @@ LIBFWUPDPLUGIN_1.5.0 {
     fu_firmware_flag_to_string;
     fu_firmware_has_flag;
     fu_firmware_image_build;
+    fu_firmware_image_get_bytes;
     fu_firmware_image_get_filename;
+    fu_firmware_image_get_offset;
     fu_firmware_image_parse;
     fu_firmware_image_set_filename;
+    fu_firmware_image_set_offset;
+    fu_firmware_remove_image;
+    fu_firmware_remove_image_by_id;
+    fu_firmware_remove_image_by_idx;
     fu_fmap_firmware_get_type;
     fu_fmap_firmware_new;
     fu_plugin_runner_add_security_attrs;
@@ -641,6 +652,7 @@ LIBFWUPDPLUGIN_1.5.0 {
     fu_security_attrs_new;
     fu_security_attrs_remove_all;
     fu_security_attrs_to_variant;
+    fu_udev_device_get_number;
     fu_udev_device_get_subsystem_model;
     fu_udev_device_get_subsystem_vendor;
   local: *;

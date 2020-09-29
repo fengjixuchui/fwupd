@@ -837,7 +837,7 @@ fu_engine_verify_from_local_metadata (FuEngine *self,
 	if (release == NULL)
 		return NULL;
 
-	/* silo has to have same lifecyle as node */
+	/* silo has to have same lifecycle as node */
 	g_object_set_data_full (G_OBJECT (release), "XbSilo",
 				g_steal_pointer (&silo),
 				(GDestroyNotify) g_object_unref);
@@ -1331,7 +1331,7 @@ fu_engine_check_requirement_id (FuEngine *self, XbNode *req, GError **error)
 		return FALSE;
 	}
 
-	g_debug ("requirement %s %s %s on %s passed",
+	g_debug ("requirement %s %s %s -> %s passed",
 		 xb_node_get_attr (req, "version"),
 		 xb_node_get_attr (req, "compare"),
 		 version, xb_node_get_text (req));
@@ -1757,7 +1757,7 @@ fu_engine_install_tasks (FuEngine *self,
 	g_autoptr(GPtrArray) devices_new = NULL;
 
 	/* do not allow auto-shutdown during this time */
-	locker = fu_idle_locker_new (self->idle, "performing update");
+	locker = fu_idle_locker_new (self->idle, "update");
 	g_assert (locker != NULL);
 
 	/* notify the plugins about the composite action */
@@ -2506,7 +2506,7 @@ fu_engine_update_prepare (FuEngine *self,
 	fu_device_remove_flag (device, FWUPD_DEVICE_FLAG_ANOTHER_WRITE_REQUIRED);
 
 	str = fu_device_to_string (device);
-	g_debug ("performing prepare on %s", str);
+	g_debug ("prepare -> %s", str);
 	if (!fu_engine_device_prepare (self, device, flags, error))
 		return FALSE;
 	for (guint j = 0; j < plugins->len; j++) {
@@ -2540,7 +2540,7 @@ fu_engine_update_cleanup (FuEngine *self,
 	if (device == NULL)
 		return FALSE;
 	str = fu_device_to_string (device);
-	g_debug ("performing cleanup on %s", str);
+	g_debug ("cleanup -> %s", str);
 	if (!fu_engine_device_cleanup (self, device, flags, error))
 		return FALSE;
 	for (guint j = 0; j < plugins->len; j++) {
@@ -2571,7 +2571,7 @@ fu_engine_update_detach (FuEngine *self, const gchar *device_id, GError **error)
 	if (device == NULL)
 		return FALSE;
 	str = fu_device_to_string (device);
-	g_debug ("performing detach on %s", str);
+	g_debug ("detach -> %s", str);
 	plugin = fu_plugin_list_find_by_name (self->plugin_list,
 					      fu_device_get_plugin (device),
 					      error);
@@ -2596,7 +2596,7 @@ fu_engine_update_attach (FuEngine *self, const gchar *device_id, GError **error)
 		return FALSE;
 	}
 	str = fu_device_to_string (device);
-	g_debug ("performing attach on %s", str);
+	g_debug ("attach -> %s", str);
 	plugin = fu_plugin_list_find_by_name (self->plugin_list,
 					      fu_device_get_plugin (device),
 					      error);
@@ -2624,7 +2624,7 @@ fu_engine_activate (FuEngine *self, const gchar *device_id, GError **error)
 	if (device == NULL)
 		return FALSE;
 	str = fu_device_to_string (device);
-	g_debug ("performing activate on %s", str);
+	g_debug ("activate -> %s", str);
 	plugin = fu_plugin_list_find_by_name (self->plugin_list,
 					      fu_device_get_plugin (device),
 					      error);
@@ -2655,7 +2655,7 @@ fu_engine_update_reload (FuEngine *self, const gchar *device_id, GError **error)
 		return FALSE;
 	}
 	str = fu_device_to_string (device);
-	g_debug ("performing reload on %s", str);
+	g_debug ("reload -> %s", str);
 	plugin = fu_plugin_list_find_by_name (self->plugin_list,
 					      fu_device_get_plugin (device),
 					      error);
@@ -2698,7 +2698,7 @@ fu_engine_update (FuEngine *self,
 	}
 	device_pending = fu_history_get_device_by_id (self->history, device_id, NULL);
 	str = fu_device_to_string (device);
-	g_debug ("performing update on %s", str);
+	g_debug ("update -> %s", str);
 	plugin = fu_plugin_list_find_by_name (self->plugin_list,
 					      fu_device_get_plugin (device),
 					      error);
@@ -2753,13 +2753,13 @@ fu_engine_update (FuEngine *self,
 }
 
 GBytes *
-fu_engine_firmware_read (FuEngine *self,
+fu_engine_firmware_dump (FuEngine *self,
 			 FuDevice *device,
 			 FwupdInstallFlags flags,
 			 GError **error)
 {
 	g_autoptr(FuDeviceLocker) locker = NULL;
-	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(GBytes) fw = NULL;
 
 	/* open, detach, read, attach, serialize */
 	locker = fu_device_locker_new (device, error);
@@ -2769,8 +2769,8 @@ fu_engine_firmware_read (FuEngine *self,
 	}
 	if (!fu_device_detach (device, error))
 		return NULL;
-	firmware = fu_device_read_firmware (device, error);
-	if (firmware == NULL) {
+	fw = fu_device_dump_firmware (device, error);
+	if (fw == NULL) {
 		g_autoptr(GError) error_local = NULL;
 		if (!fu_device_attach (device, &error_local)) {
 			g_warning ("failed to attach after read image failure: %s",
@@ -2780,7 +2780,7 @@ fu_engine_firmware_read (FuEngine *self,
 	}
 	if (!fu_device_attach (device, error))
 		return NULL;
-	return fu_firmware_write (firmware, error);
+	return g_steal_pointer (&fw);
 }
 
 gboolean
@@ -3222,7 +3222,7 @@ fu_engine_load_metadata_store (FuEngine *self, FuEngineLoadFlags flags, GError *
 	g_clear_object (&self->silo);
 
 	/* verbose profiling */
-	if (g_getenv ("FWUPD_VERBOSE") != NULL) {
+	if (g_getenv ("FWUPD_XMLB_VERBOSE") != NULL) {
 		xb_builder_set_profile_flags (builder,
 					      XB_SILO_PROFILE_FLAG_XPATH |
 					      XB_SILO_PROFILE_FLAG_DEBUG);
@@ -4215,7 +4215,6 @@ fu_engine_check_release_is_blocked (FuEngine *self, FwupdRelease *rel)
 		return FALSE;
 	for (guint i = 0; i < csums->len; i++) {
 		const gchar *csum = g_ptr_array_index (csums, i);
-		g_debug ("checking %s against blocked list", csum);
 		if (g_hash_table_lookup (self->blocked_firmware, csum) != NULL)
 			return TRUE;
 	}
@@ -4725,7 +4724,7 @@ fu_engine_get_upgrades (FuEngine *self,
 		    !fwupd_release_has_flag (rel_tmp, FWUPD_RELEASE_FLAG_IS_DOWNGRADE)) {
 			g_string_append_printf (error_str, "%s=same, ",
 						fwupd_release_get_version (rel_tmp));
-			g_debug ("ignoring %s as the same as %s",
+			g_debug ("ignoring %s == %s",
 				 fwupd_release_get_version (rel_tmp),
 				 fu_device_get_version (device));
 			continue;
@@ -4735,7 +4734,7 @@ fu_engine_get_upgrades (FuEngine *self,
 		if (fwupd_release_has_flag (rel_tmp, FWUPD_RELEASE_FLAG_IS_DOWNGRADE)) {
 			g_string_append_printf (error_str, "%s=older, ",
 						fwupd_release_get_version (rel_tmp));
-			g_debug ("ignoring %s as older than %s",
+			g_debug ("ignoring %s < %s",
 				 fwupd_release_get_version (rel_tmp),
 				 fu_device_get_version (device));
 			continue;
@@ -5315,7 +5314,7 @@ static gboolean
 fu_engine_recoldplug_delay_cb (gpointer user_data)
 {
 	FuEngine *self = (FuEngine *) user_data;
-	g_debug ("performing a recoldplug");
+	g_debug ("recoldplugging");
 	fu_engine_plugins_coldplug (self, TRUE);
 	self->coldplug_id = 0;
 	return FALSE;
@@ -5354,8 +5353,7 @@ fu_engine_udev_device_add (FuEngine *self, GUdevDevice *udev_device)
 		plugin = fu_plugin_list_find_by_name (self->plugin_list,
 						      plugin_name, &error);
 		if (plugin == NULL) {
-			g_debug ("failed to find specified plugin %s: %s",
-				 plugin_name, error->message);
+			g_debug ("%s", error->message);
 			continue;
 		}
 		if (!fu_plugin_runner_udev_device_added (plugin, device, &error)) {
@@ -5495,8 +5493,9 @@ fu_engine_enumerate_udev (FuEngine *self)
 		const gchar *subsystem = g_ptr_array_index (self->udev_subsystems, i);
 		GList *devices = g_udev_client_query_by_subsystem (self->gudev_client,
 								   subsystem);
-		g_debug ("%u devices with subsystem %s",
-			 g_list_length (devices), subsystem);
+		if (g_list_length (devices) > 0)
+			g_debug ("%u devices with subsystem %s",
+				 g_list_length (devices), subsystem);
 		for (GList *l = devices; l != NULL; l = l->next) {
 			GUdevDevice *udev_device = l->data;
 			fu_engine_udev_device_add (self, udev_device);
@@ -5856,7 +5855,6 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 		g_signal_connect (plugin, "add-firmware-gtype",
 				  G_CALLBACK (fu_engine_plugin_add_firmware_gtype_cb),
 				  self);
-		g_debug ("adding plugin %s", filename);
 
 		/* if loaded from fu_engine_load() open the plugin */
 		if (self->usb_ctx != NULL) {
@@ -5997,8 +5995,7 @@ fu_engine_usb_device_added_cb (GUsbContext *ctx,
 		plugin = fu_plugin_list_find_by_name (self->plugin_list,
 						      plugin_name, &error);
 		if (plugin == NULL) {
-			g_debug ("failed to find specified plugin %s: %s",
-				 plugin_name, error->message);
+			g_debug ("%s", error->message);
 			continue;
 		}
 		if (!fu_plugin_runner_usb_device_added (plugin, device, &error)) {

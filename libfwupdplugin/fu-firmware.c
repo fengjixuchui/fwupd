@@ -245,7 +245,45 @@ fu_firmware_parse (FuFirmware *self, GBytes *fw, FwupdInstallFlags flags, GError
  * @n: A #XbNode
  * @error: A #GError, or %NULL
  *
- * Builds a firmware from an XML manifest.
+ * Builds a firmware from an XML manifest. The manifest would typically have the
+ * following form:
+ *
+ * |[<!-- language="XML" -->
+ * <?xml version="1.0" encoding="UTF-8"?>
+ * <firmware gtype="FuBcm57xxFirmware">
+ *   <version>1.2.3</version>
+ *   <image gtype="FuBcm57xxStage1Image">
+ *     <version>7.8.9</version>
+ *     <id>stage1</id>
+ *     <idx>0x01</idx>
+ *     <filename>stage1.bin</filename>
+ *   </image>
+ *   <image gtype="FuBcm57xxStage2Image">
+ *     <id>stage2</id>
+ *     <data/> <!-- empty! -->
+ *   </image>
+ *   <image gtype="FuBcm57xxDictImage">
+ *     <id>ape</id>
+ *     <addr>0x7</addr>
+ *     <data>aGVsbG8gd29ybGQ=</data> <!-- base64 -->
+ *   </image>
+ * </firmware>
+ * ]|
+ *
+ * This would be used in a build-system to merge images from generated files:
+ * `fwupdtool firmware-build fw.builder.xml test.fw`
+ *
+ * Static binary content can be specified in the `<image>/<data>` sections and
+ * is encoded as base64 text if not empty.
+ *
+ * Additionally, extra nodes can be included under `<image>` and `<firmware>`
+ * which can be parsed by the subclassed objects. You should verify the
+ * subclassed object `FuFirmwareImage->build` vfunc for the specific additional
+ * options supported.
+ *
+ * Plugins should manually g_type_ensure() subclassed image objects if not
+ * constructed as part of the plugin fu_plugin_init() or fu_plugin_setup()
+ * functions.
  *
  * Returns: %TRUE for success
  *
@@ -272,7 +310,21 @@ fu_firmware_build (FuFirmware *self, XbNode *n, GError **error)
 	if (xb_images != NULL) {
 		for (guint i = 0; i < xb_images->len; i++) {
 			XbNode *xb_image = g_ptr_array_index (xb_images, i);
-			g_autoptr(FuFirmwareImage) img = fu_firmware_image_new (NULL);
+			g_autoptr(FuFirmwareImage) img = NULL;
+			tmp = xb_node_get_attr (xb_image, "gtype");
+			if (tmp != NULL) {
+				GType gtype = g_type_from_name (tmp);
+				if (gtype == G_TYPE_INVALID) {
+					g_set_error (error,
+						     G_IO_ERROR,
+						     G_IO_ERROR_NOT_FOUND,
+						     "GType %s not registered", tmp);
+					return FALSE;
+				}
+				img = g_object_new (gtype, NULL);
+			} else {
+				img = fu_firmware_image_new (NULL);
+			}
 			if (!fu_firmware_image_build (img, xb_image, error))
 				return FALSE;
 			fu_firmware_add_image (self, img);
@@ -407,6 +459,95 @@ fu_firmware_add_image (FuFirmware *self, FuFirmwareImage *img)
 	}
 
 	g_ptr_array_add (priv->images, g_object_ref (img));
+}
+
+/**
+ * fu_firmware_remove_image:
+ * @self: a #FuPlugin
+ * @img: A #FuFirmwareImage
+ * @error: A #GError, or %NULL
+ *
+ * Remove an image from the firmware.
+ *
+ * Returns: %TRUE if the image was removed
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_firmware_remove_image (FuFirmware *self, FuFirmwareImage *img, GError **error)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
+	g_return_val_if_fail (FU_IS_FIRMWARE_IMAGE (img), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	if (g_ptr_array_remove (priv->images, img))
+		return TRUE;
+
+	/* did not exist */
+	g_set_error (error,
+		     FWUPD_ERROR,
+		     FWUPD_ERROR_NOT_FOUND,
+		     "image %s not found in firmware",
+		     fu_firmware_image_get_id (img));
+	return FALSE;
+}
+
+/**
+ * fu_firmware_remove_image_by_idx:
+ * @self: a #FuPlugin
+ * @idx: index
+ * @error: A #GError, or %NULL
+ *
+ * Removes the first image from the firmware matching the index.
+ *
+ * Returns: %TRUE if an image was removed
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_firmware_remove_image_by_idx (FuFirmware *self, guint64 idx, GError **error)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(FuFirmwareImage) img = NULL;
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	img = fu_firmware_get_image_by_idx (self, idx, error);
+	if (img == NULL)
+		return FALSE;
+	g_ptr_array_remove (priv->images, img);
+	return TRUE;
+}
+
+/**
+ * fu_firmware_remove_image_by_id:
+ * @self: a #FuPlugin
+ * @id: (nullable): image ID, e.g. "config"
+ * @error: A #GError, or %NULL
+ *
+ * Removes the first image from the firmware matching the ID.
+ *
+ * Returns: %TRUE if an image was removed
+ *
+ * Since: 1.5.0
+ **/
+gboolean
+fu_firmware_remove_image_by_id (FuFirmware *self, const gchar *id, GError **error)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_autoptr(FuFirmwareImage) img = NULL;
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	img = fu_firmware_get_image_by_id (self, id, error);
+	if (img == NULL)
+		return FALSE;
+	g_ptr_array_remove (priv->images, img);
+	return TRUE;
 }
 
 /**

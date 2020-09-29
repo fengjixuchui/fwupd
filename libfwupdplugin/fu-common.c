@@ -163,7 +163,8 @@ fu_common_mkdir_parent (const gchar *filename, GError **error)
 	g_autofree gchar *parent = NULL;
 
 	parent = g_path_get_dirname (filename);
-	g_debug ("creating path %s", parent);
+	if (!g_file_test (parent, G_FILE_TEST_IS_DIR))
+		g_debug ("creating path %s", parent);
 	if (g_mkdir_with_parents (parent, 0755) == -1) {
 		g_set_error (error,
 			     FWUPD_ERROR,
@@ -2334,4 +2335,102 @@ fu_common_get_esp_for_path (const gchar *esp_path, GError **error)
 		     "No ESP with path %s",
 		     esp_path);
 	return NULL;
+}
+
+/**
+ * fu_common_crc8:
+ * @buf: memory buffer
+ * @bufsz: sizeof buf
+ *
+ * Returns the cyclic redundancy check value for the given memory buffer.
+ *
+ * Returns: CRC value
+ *
+ * Since: 1.5.0
+ **/
+guint8
+fu_common_crc8 (const guint8 *buf, gsize bufsz)
+{
+	guint32 crc = 0;
+	for (gsize j = bufsz; j > 0; j--) {
+		crc ^= (*(buf++) << 8);
+		for (guint32 i = 8; i; i--) {
+			if (crc & 0x8000)
+				crc ^= (0x1070 << 3);
+			crc <<= 1;
+		}
+	}
+	return ~((guint8) (crc >> 8));
+}
+
+/**
+ * fu_common_crc16:
+ * @buf: memory buffer
+ * @bufsz: sizeof buf
+ *
+ * Returns the cyclic redundancy check value for the given memory buffer.
+ *
+ * Returns: CRC value
+ *
+ * Since: 1.5.0
+ **/
+guint16
+fu_common_crc16 (const guint8 *buf, gsize bufsz)
+{
+	guint16 crc = 0xffff;
+	for (gsize len = bufsz; len > 0; len--) {
+		crc = (guint16) (crc ^ (*buf++));
+		for (guint8 i = 0; i < 8; i++) {
+			if (crc & 0x1) {
+				crc = (crc >> 1) ^ 0xa001;
+			} else {
+				crc >>= 1;
+			}
+		}
+	}
+	return ~crc;
+}
+
+/**
+ * fu_common_crc32_full:
+ * @buf: memory buffer
+ * @bufsz: sizeof buf
+ * @crc: initial CRC value, typically 0xFFFFFFFF
+ * @polynomial: CRC polynomial, typically 0xEDB88320
+ *
+ * Returns the cyclic redundancy check value for the given memory buffer.
+ *
+ * Returns: CRC value
+ *
+ * Since: 1.5.0
+ **/
+guint32
+fu_common_crc32_full (const guint8 *buf, gsize bufsz, guint32 crc, guint32 polynomial)
+{
+	for (guint32 idx = 0; idx < bufsz; idx++) {
+		guint8 data = *buf++;
+		crc = crc ^ data;
+		for (guint32 bit = 0; bit < 8; bit++) {
+			guint32 mask = -(crc & 1);
+			crc = (crc >> 1) ^ (polynomial & mask);
+		}
+	}
+	return ~crc;
+}
+
+/**
+ * fu_common_crc32:
+ * @buf: memory buffer
+ * @bufsz: sizeof buf
+ *
+ * Returns the cyclic redundancy check value for the given memory buffer.
+ *
+ * Returns: CRC value
+ *
+ * Since: 1.5.0
+ **/
+guint32
+fu_common_crc32 (const guint8 *buf, gsize bufsz)
+{
+	return fu_common_crc32_full (buf, bufsz, 0xFFFFFFFF, 0xEDB88320);
 }

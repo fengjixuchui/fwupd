@@ -7,6 +7,7 @@
 
 #include "config.h"
 
+#include "fu-common.h"
 #include "fu-firmware.h"
 
 #include "fu-vli-pd-device.h"
@@ -362,18 +363,14 @@ fu_vli_pd_device_prepare_firmware (FuDevice *device,
 	return g_steal_pointer (&firmware);
 }
 
-static FuFirmware *
-fu_vli_pd_device_read_firmware (FuDevice *device, GError **error)
+static GBytes *
+fu_vli_pd_device_dump_firmware (FuDevice *device, GError **error)
 {
 	FuVliPdDevice *self = FU_VLI_PD_DEVICE (device);
-	g_autoptr(GBytes) fw = NULL;
-	fu_device_set_status (FU_DEVICE (self), FWUPD_STATUS_DEVICE_VERIFY);
-	fw = fu_vli_device_spi_read (FU_VLI_DEVICE (self), 0x0,
-				     fu_device_get_firmware_size_max (device),
-				     error);
-	if (fw == NULL)
-		return NULL;
-	return fu_firmware_new_from_bytes (fw);
+	fu_device_set_status (FU_DEVICE (self), FWUPD_STATUS_DEVICE_READ);
+	return fu_vli_device_spi_read (FU_VLI_DEVICE (self), 0x0,
+				       fu_device_get_firmware_size_max (device),
+				       error);
 }
 
 static gboolean
@@ -419,7 +416,7 @@ fu_vli_pd_device_write_dual_firmware (FuVliPdDevice *self, GBytes *fw, GError **
 		g_prefix_error (error, "failed to read file CRC: ");
 		return FALSE;
 	}
-	crc_actual = fu_vli_common_crc16 (sbuf, sbufsz - 2);
+	crc_actual = fu_common_crc16 (sbuf, sbufsz - 2);
 	fu_device_set_status (FU_DEVICE (self), FWUPD_STATUS_DEVICE_WRITE);
 
 	/* update fw2 first if fw1 correct */
@@ -688,7 +685,7 @@ fu_vli_pd_device_class_init (FuVliPdDeviceClass *klass)
 {
 	FuDeviceClass *klass_device = FU_DEVICE_CLASS (klass);
 	FuVliDeviceClass *klass_vli_device = FU_VLI_DEVICE_CLASS (klass);
-	klass_device->read_firmware = fu_vli_pd_device_read_firmware;
+	klass_device->dump_firmware = fu_vli_pd_device_dump_firmware;
 	klass_device->write_firmware = fu_vli_pd_device_write_firmware;
 	klass_device->prepare_firmware = fu_vli_pd_device_prepare_firmware;
 	klass_device->attach = fu_vli_pd_device_attach;

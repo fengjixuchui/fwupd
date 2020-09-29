@@ -402,7 +402,6 @@ fu_plugin_update (FuPlugin *plugin,
 	g_assert (str != NULL);
 
 	/* perform the update */
-	g_debug ("Performing UEFI capsule update");
 	fu_device_set_status (device, FWUPD_STATUS_SCHEDULING);
 	if (!fu_plugin_uefi_update_splash (plugin, device, &error_splash)) {
 		g_debug ("failed to upload UEFI UX capsule text: %s",
@@ -543,7 +542,6 @@ fu_plugin_uefi_test_secure_boot (FuPlugin *plugin)
 	const gchar *result_str = "Disabled";
 	if (fu_efivar_secure_boot_enabled ())
 		result_str = "Enabled";
-	g_debug ("SecureBoot is: %s", result_str);
 	fu_plugin_add_report_metadata (plugin, "SecureBoot", result_str);
 }
 

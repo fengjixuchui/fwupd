@@ -108,6 +108,15 @@ fu_archive_cab_func (void)
 }
 
 static void
+fu_common_crc_func (void)
+{
+	guint8 buf[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 };
+	g_assert_cmpint (fu_common_crc8 (buf, sizeof(buf)), ==, 0x7A);
+	g_assert_cmpint (fu_common_crc16 (buf, sizeof(buf)), ==, 0x4DF1);
+	g_assert_cmpint (fu_common_crc32 (buf, sizeof(buf)), ==, 0x40EFAB9E);
+}
+
+static void
 fu_common_string_append_kv_func (void)
 {
 	g_autoptr(GString) str = g_string_new (NULL);
@@ -1652,12 +1661,14 @@ fu_firmware_dfu_func (void)
 static void
 fu_firmware_func (void)
 {
+	gboolean ret;
 	g_autoptr(FuFirmware) firmware = fu_firmware_new ();
 	g_autoptr(FuFirmwareImage) img1 = fu_firmware_image_new (NULL);
 	g_autoptr(FuFirmwareImage) img2 = fu_firmware_image_new (NULL);
 	g_autoptr(FuFirmwareImage) img_id = NULL;
 	g_autoptr(FuFirmwareImage) img_idx = NULL;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) images = NULL;
 	g_autofree gchar *str = NULL;
 
 	fu_firmware_image_set_addr (img1, 0x200);
@@ -1703,6 +1714,19 @@ fu_firmware_func (void)
 				  "  ID:                   secondary\n"
 				  "  Index:                0x17\n"
 				  "  Address:              0x400\n");
+
+	ret = fu_firmware_remove_image_by_idx (firmware, 0xd, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_remove_image_by_id (firmware, "secondary", &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	images = fu_firmware_get_images (firmware);
+	g_assert_nonnull (images);
+	g_assert_cmpint (images->len, ==, 0);
+	ret = fu_firmware_remove_image_by_id (firmware, "NOTGOINGTOEXIST", &error);
+	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND);
+	g_assert_false (ret);
 }
 
 static void
@@ -2021,6 +2045,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/plugin{quirks-performance}", fu_plugin_quirks_performance_func);
 	g_test_add_func ("/fwupd/plugin{quirks-device}", fu_plugin_quirks_device_func);
 	g_test_add_func ("/fwupd/chunk", fu_chunk_func);
+	g_test_add_func ("/fwupd/common{crc}", fu_common_crc_func);
 	g_test_add_func ("/fwupd/common{string-append-kv}", fu_common_string_append_kv_func);
 	g_test_add_func ("/fwupd/common{version-guess-format}", fu_common_version_guess_format_func);
 	g_test_add_func ("/fwupd/common{version}", fu_common_version_func);
