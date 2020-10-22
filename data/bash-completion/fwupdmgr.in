@@ -18,6 +18,7 @@ _fwupdmgr_cmd_list=(
 	'get-topology'
 	'get-updates'
 	'get-upgrades'
+	'get-plugins'
 	'install'
 	'modify-config'
 	'modify-remote'
@@ -26,6 +27,7 @@ _fwupdmgr_cmd_list=(
 	'report-history'
 	'security'
 	'set-approved-firmware'
+	'switch-branch'
 	'unlock'
 	'unblock-firmware'
 	'update'
@@ -40,6 +42,7 @@ _fwupdmgr_opts=(
 	'--offline'
 	'--allow-reinstall'
 	'--allow-older'
+	'--allow-branch-switch'
 	'--force'
 	'--assume-yes'
 	'--no-history'
@@ -51,6 +54,7 @@ _fwupdmgr_opts=(
 	'--sign'
 	'--filter'
 	'--disable-ssl-strict'
+	'--ignore-power'
 )
 
 _show_filters()
@@ -98,7 +102,7 @@ _fwupdmgr()
 	esac
 
 	case $command in
-	activate|clear-results|downgrade|get-releases|get-results|unlock|verify|verify-update|get-updates)
+	activate|clear-results|downgrade|get-releases|get-results|unlock|verify|verify-update|get-updates|switch-branch)
 		if [[ "$prev" = "$command" ]]; then
 			_show_device_ids
 		else

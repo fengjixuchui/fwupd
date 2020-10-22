@@ -108,6 +108,24 @@ fu_archive_cab_func (void)
 }
 
 static void
+fu_common_byte_array_func (void)
+{
+	g_autoptr(GByteArray) array = g_byte_array_new ();
+
+	fu_byte_array_append_uint8 (array, (guint8) 'h');
+	fu_byte_array_append_uint8 (array, (guint8) 'e');
+	fu_byte_array_append_uint8 (array, (guint8) 'l');
+	fu_byte_array_append_uint8 (array, (guint8) 'l');
+	fu_byte_array_append_uint8 (array, (guint8) 'o');
+	g_assert_cmpint (array->len, ==, 5);
+	g_assert_cmpint (memcmp (array->data, "hello", array->len), ==, 0);
+
+	fu_byte_array_set_size (array, 10);
+	g_assert_cmpint (array->len, ==, 10);
+	g_assert_cmpint (memcmp (array->data, "hello\0\0\0\0\0", array->len), ==, 0);
+}
+
+static void
 fu_common_crc_func (void)
 {
 	guint8 buf[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 };
@@ -273,6 +291,31 @@ fu_smbios3_func (void)
 	str = fu_smbios_get_string (smbios, FU_SMBIOS_STRUCTURE_TYPE_BIOS, 0x04, &error);
 	g_assert_no_error (error);
 	g_assert_cmpstr (str, ==, "Dell Inc.");
+}
+
+static void
+fu_smbios_dt_func (void)
+{
+	const gchar *str;
+	gboolean ret;
+	g_autofree gchar *path = NULL;
+	g_autoptr(FuSmbios) smbios = NULL;
+	g_autoptr(GError) error = NULL;
+
+	path = g_build_filename (TESTDATADIR_SRC, "devicetree", "base", NULL);
+	smbios = fu_smbios_new ();
+	ret = fu_smbios_setup_from_path (smbios, path, &error);
+	g_assert_no_error (error);
+	g_assert (ret);
+	if (g_getenv ("VERBOSE") != NULL) {
+		g_autofree gchar *dump = fu_smbios_to_string (smbios);
+		g_debug ("%s", dump);
+	}
+
+	/* get vendor */
+	str = fu_smbios_get_string (smbios, FU_SMBIOS_STRUCTURE_TYPE_SYSTEM, 0x04, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (str, ==, "Hughski Limited");
 }
 
 static void
@@ -1289,6 +1332,7 @@ fu_common_vercmp_func (void)
 	/* same */
 	g_assert_cmpint (fu_common_vercmp ("1.2.3", "1.2.3"), ==, 0);
 	g_assert_cmpint (fu_common_vercmp ("001.002.003", "001.002.003"), ==, 0);
+	g_assert_cmpint (fu_common_vercmp_full ("0x00000002", "0x2", FWUPD_VERSION_FORMAT_HEX), ==, 0);
 
 	/* upgrade and downgrade */
 	g_assert_cmpint (fu_common_vercmp ("1.2.3", "1.2.4"), <, 0);
@@ -1782,6 +1826,7 @@ fu_efivar_func (void)
 	guint32 attr = 0;
 	g_autofree guint8 *data = NULL;
 	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) names = NULL;
 
 	/* check supported */
 	ret = fu_efivar_supported (&error);
@@ -1791,6 +1836,12 @@ fu_efivar_func (void)
 	/* check existing keys */
 	g_assert_false (fu_efivar_exists (FU_EFIVAR_GUID_EFI_GLOBAL, "NotGoingToExist"));
 	g_assert_true (fu_efivar_exists (FU_EFIVAR_GUID_EFI_GLOBAL, "SecureBoot"));
+
+	/* list a few keys */
+	names = fu_efivar_get_names (FU_EFIVAR_GUID_EFI_GLOBAL, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (names);
+	g_assert_cmpint (names->len, ==, 2);
 
 	/* write and read a key */
 	ret = fu_efivar_set_data (FU_EFIVAR_GUID_EFI_GLOBAL, "Test",
@@ -2045,6 +2096,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/plugin{quirks-performance}", fu_plugin_quirks_performance_func);
 	g_test_add_func ("/fwupd/plugin{quirks-device}", fu_plugin_quirks_device_func);
 	g_test_add_func ("/fwupd/chunk", fu_chunk_func);
+	g_test_add_func ("/fwupd/common{byte-array}", fu_common_byte_array_func);
 	g_test_add_func ("/fwupd/common{crc}", fu_common_crc_func);
 	g_test_add_func ("/fwupd/common{string-append-kv}", fu_common_string_append_kv_func);
 	g_test_add_func ("/fwupd/common{version-guess-format}", fu_common_version_guess_format_func);
@@ -2068,6 +2120,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/hwids", fu_hwids_func);
 	g_test_add_func ("/fwupd/smbios", fu_smbios_func);
 	g_test_add_func ("/fwupd/smbios3", fu_smbios3_func);
+	g_test_add_func ("/fwupd/smbios{dt}", fu_smbios_dt_func);
 	g_test_add_func ("/fwupd/firmware", fu_firmware_func);
 	g_test_add_func ("/fwupd/firmware{dedupe}", fu_firmware_dedupe_func);
 	g_test_add_func ("/fwupd/firmware{build}", fu_firmware_build_func);

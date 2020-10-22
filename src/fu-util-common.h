@@ -32,8 +32,21 @@ typedef enum {
 	FU_SECURITY_ATTR_TO_STRING_FLAG_LAST
 } FuSecurityAttrToStringFlags;
 
+typedef enum {
+	FU_UTIL_CLI_COLOR_BLACK		= 30,
+	FU_UTIL_TERM_COLOR_RED		= 31,
+	FU_UTIL_CLI_COLOR_GREEN		= 32,
+	FU_UTIL_CLI_COLOR_YELLOW	= 33,
+	FU_UTIL_CLI_COLOR_BLUE		= 34,
+	FU_UTIL_CLI_COLOR_MAGENTA	= 35,
+	FU_UTIL_CLI_COLOR_CYAN		= 36,
+	FU_UTIL_CLI_COLOR_WHITE		= 37,
+} FuUtilTermColor;
+
 void		 fu_util_print_data		(const gchar	*title,
 						 const gchar	*msg);
+gchar		*fu_util_term_format		(const gchar	*text,
+						 FuUtilTermColor fg_color);
 guint		 fu_util_prompt_for_number	(guint		 maxnum);
 gboolean	 fu_util_prompt_for_boolean	(gboolean	 def);
 
@@ -66,6 +79,7 @@ gboolean	 fu_util_cmd_array_run		(GPtrArray	*array,
 						 gchar		**values,
 						 GError		**error);
 gchar		*fu_util_release_get_name	(FwupdRelease	*release);
+const gchar	*fu_util_release_get_branch	(FwupdRelease	*release);
 
 const gchar	*fu_util_get_systemd_unit	(void);
 gboolean	 fu_util_using_correct_daemon	(GError		**error);
@@ -80,6 +94,9 @@ gchar		*fu_util_time_to_str		(guint64	 tmp);
 
 gchar		*fu_util_device_to_string	(FwupdDevice	*dev,
 						 guint		 idt);
+gchar		*fu_util_plugin_to_string	(FwupdPlugin	*plugin,
+						 guint		 idt);
+const gchar	*fu_util_plugin_flag_to_string	(FwupdPluginFlags plugin_flag);
 gchar		*fu_util_release_to_string	(FwupdRelease	*rel,
 						 guint		 idt);
 gchar		*fu_util_remote_to_string	(FwupdRemote *remote,
@@ -96,3 +113,8 @@ gint		 fu_util_sort_devices_by_flags_cb	(gconstpointer	 a,
 						 gconstpointer	 b);
 gint		 fu_util_device_order_sort_cb	(gconstpointer a,
 						 gconstpointer b);
+
+gboolean	 fu_util_switch_branch_warning	(FwupdDevice	*dev,
+						 FwupdRelease	*rel,
+						 gboolean	 assume_yes,
+						 GError		**error);

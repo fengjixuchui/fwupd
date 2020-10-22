@@ -210,11 +210,16 @@ libjsonglib = dependency('json-glib-1.0', version : '>= 1.1.1')
 valgrind = dependency('valgrind', required: false)
 soup = dependency('libsoup-2.4', version : '>= 2.51.92')
 if build_daemon
-  polkit = dependency('polkit-gobject-1', version : '>= 0.103')
-  if polkit.version().version_compare('>= 0.114')
-    conf.set('HAVE_POLKIT_0_114', '1')
-  endif
+  if get_option('polkit')
+    polkit = dependency('polkit-gobject-1', version : '>= 0.103')
+    conf.set('HAVE_POLKIT', '1')
+    if polkit.version().version_compare('>= 0.114')
+      conf.set('HAVE_POLKIT_0_114', '1')
+    endif
   conf.set_quoted ('POLKIT_ACTIONDIR', polkit.get_pkgconfig_variable('actiondir'))
+  else
+    warning('Polkit is disabled, the daemon will allow ALL client actions')
+  endif
   udevdir = get_option('udevdir')
   if udevdir == ''
     udev = dependency('udev')
@@ -238,10 +243,6 @@ if valgrind.found()
   conf.set('HAVE_VALGRIND', '1')
 endif
 
-if build_standalone and get_option('plugin_redfish')
-  efivar = dependency('efivar')
-endif
-
 if build_standalone and get_option('plugin_altos')
   libelf = dependency('libelf')
 endif
@@ -254,8 +255,17 @@ endif
 if cc.has_header('sys/ioctl.h')
   conf.set('HAVE_IOCTL_H', '1')
 endif
-if cc.has_header('sys/errno.h')
+if cc.has_header('errno.h')
   conf.set('HAVE_ERRNO_H', '1')
+endif
+if cc.has_header('sys/socket.h')
+  conf.set('HAVE_SOCKET_H', '1')
+endif
+if cc.has_header('linux/ethtool.h')
+  conf.set('HAVE_ETHTOOL_H', '1')
+endif
+if cc.has_header('sys/mman.h')
+  conf.set('HAVE_MMAN_H', '1')
 endif
 if cc.has_header('poll.h')
   conf.set('HAVE_POLL_H', '1')
@@ -297,8 +307,6 @@ if build_standalone and get_option('plugin_uefi')
   cairo = dependency('cairo')
   fontconfig = cc.find_library('fontconfig')
   freetype = cc.find_library('freetype')
-  efivar = dependency('efivar', version : '>= 33')
-  conf.set_quoted('EFIVAR_LIBRARY_VERSION', efivar.version())
   efiboot = dependency('efiboot')
   objcopy = find_program ('objcopy')
   readelf = find_program ('readelf')
@@ -306,6 +314,8 @@ if build_standalone and get_option('plugin_uefi')
 
   efi_app_location = join_paths(libexecdir, 'fwupd', 'efi')
   conf.set_quoted ('EFI_APP_LOCATION', efi_app_location)
+
+  conf.set('EFI_OBJCOPY', get_option('efi-objcopy'))
 
   if host_cpu == 'x86'
           EFI_MACHINE_TYPE_NAME = 'ia32'
@@ -332,7 +342,6 @@ endif
 
 if build_standalone and get_option('plugin_dell')
   libsmbios_c = dependency('libsmbios_c', version : '>= 2.4.0')
-  efivar = dependency('efivar')
   conf.set('HAVE_DELL', '1')
   if not get_option('plugin_uefi')
     error('plugin_dell also needs plugin_uefi to work')
@@ -443,7 +452,7 @@ if get_option('gtkdoc')
   subdir('docs')
 endif
 subdir('libfwupd')
-if build_daemon
+if build_daemon and get_option('polkit')
   subdir('policy')
 endif
 if build_standalone

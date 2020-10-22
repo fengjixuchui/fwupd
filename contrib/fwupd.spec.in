@@ -144,6 +144,14 @@ Provides: fwupdate
 Provides: fwupdate-efi
 %endif
 
+# optional, but a really good idea
+%if 0%{?have_modem_manager}
+Recommends: %{name}-plugin-modem-manager
+%endif
+%if 0%{?have_flashrom}
+Recommends: %{name}-plugin-flashrom
+%endif
+
 %description
 fwupd is a daemon to allow session software to update device firmware.
 
@@ -161,6 +169,24 @@ Summary: Data files for installed tests
 
 %description tests
 Data files for installed tests.
+
+%if 0%{?have_modem_manager}
+%package plugin-modem-manager
+Summary: fwupd plugin using ModemManger
+
+%description plugin-modem-manager
+This provides the optional package which is only required on hardware that
+might have mobile broadband hardware. It is probably not required on servers.
+%endif
+
+%if 0%{?have_flashrom}
+%package plugin-flashrom
+Summary: fwupd plugin using flashrom
+
+%description plugin-flashrom
+This provides the optional package which is only required on hardware that
+can be flashed using flashrom. It is probably not required on servers.
+%endif
 
 %prep
 %autosetup -p1
@@ -308,8 +334,8 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_sysconfdir}/pki/fwupd-metadata
 %if 0%{?have_msr}
 %{_sysconfdir}/modules-load.d/fwupd-msr.conf
-%{_sysconfdir}/modules-load.d/fwupd-platform-integrity.conf
 %endif
+%{_sysconfdir}/modules-load.d/fwupd-platform-integrity.conf
 %{_datadir}/dbus-1/system.d/org.freedesktop.fwupd.conf
 %{_datadir}/bash-completion/completions/fwupdmgr
 %{_datadir}/bash-completion/completions/fwupdtool
@@ -362,6 +388,7 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/fwupd-plugins-3/libfu_plugin_altos.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_amt.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ata.so
+%{_libdir}/fwupd-plugins-3/libfu_plugin_bcm57xx.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_bios.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ccgx.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_colorhug.so
@@ -380,9 +407,6 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/fwupd-plugins-3/libfu_plugin_emmc.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ep963x.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_fastboot.so
-%if 0%{?have_flashrom}
-%{_libdir}/fwupd-plugins-3/libfu_plugin_flashrom.so
-%endif
 %{_libdir}/fwupd-plugins-3/libfu_plugin_fresco_pd.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_iommu.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_jabra.so
@@ -390,9 +414,6 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/fwupd-plugins-3/libfu_plugin_linux_sleep.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_linux_swap.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_linux_tainted.so
-%if 0%{?have_modem_manager}
-%{_libdir}/fwupd-plugins-3/libfu_plugin_modem_manager.so
-%endif
 %if 0%{?have_msr}
 %{_libdir}/fwupd-plugins-3/libfu_plugin_msr.so
 %endif
@@ -443,6 +464,15 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_datadir}/locale/*/LC_IMAGES/fwupd*
 %endif
 
+%if 0%{?have_modem_manager}
+%files plugin-modem-manager
+%{_libdir}/fwupd-plugins-3/libfu_plugin_modem_manager.so
+%endif
+%if 0%{?have_flashrom}
+%files plugin-flashrom
+%{_libdir}/fwupd-plugins-3/libfu_plugin_flashrom.so
+%endif
+
 %files devel
 %{_datadir}/gir-1.0/Fwupd-2.0.gir
 %{_datadir}/gir-1.0/FwupdPlugin-1.0.gir
@@ -453,6 +483,7 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/pkgconfig/fwupd.pc
 %{_libdir}/pkgconfig/fwupdplugin.pc
 
+%if 0%{?enable_tests}
 %files tests
 %dir %{_datadir}/installed-tests/fwupd
 %{_datadir}/installed-tests/fwupd/fwupd-tests.xml
@@ -462,6 +493,7 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libexecdir}/installed-tests/fwupd/*
 %dir %{_sysconfdir}/fwupd/remotes.d
 %config(noreplace)%{_sysconfdir}/fwupd/remotes.d/fwupd-tests.conf
+%endif
 
 %changelog
 * #LONGDATE# Richard Hughes <richard@hughsie.com> #VERSION#-0.#BUILD##ALPHATAG#

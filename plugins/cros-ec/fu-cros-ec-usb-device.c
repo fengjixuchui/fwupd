@@ -21,6 +21,7 @@
 #define FLUSH_TIMEOUT_MS		10
 #define BULK_SEND_TIMEOUT_MS		2000
 #define BULK_RECV_TIMEOUT_MS		5000
+#define CROS_EC_REMOVE_DELAY_RE_ENUMERATE              20000
 
 #define UPDATE_DONE			0xB007AB1E
 #define UPDATE_EXTRA_CMD		0xB007AB1F
@@ -264,6 +265,20 @@ fu_cros_ec_usb_device_flush (FuDevice *device, gpointer user_data,
 	return TRUE;
 }
 
+static gboolean
+fu_cros_ec_usb_device_recovery (FuDevice *device, GError **error)
+{
+	/* flush all data from endpoint to recover in case of error */
+	if (!fu_device_retry (device, fu_cros_ec_usb_device_flush,
+			      SETUP_RETRY_CNT, NULL, error)) {
+		g_prefix_error (error, "failed to flush device to idle state: ");
+		return FALSE;
+	}
+
+	/* success */
+	return TRUE;
+}
+
 /*
  * Channel TPM extension/vendor command over USB. The payload of the USB frame
  * in this case consists of the 2 byte subcommand code concatenated with the
@@ -341,12 +356,8 @@ fu_cros_ec_usb_device_setup (FuDevice *device, GError **error)
 	START_RESP start_resp;
 	g_auto(GStrv) config_split = NULL;
 
-	/* flush all data from endpoint to recover in case of error */
-	if (!fu_device_retry (device, fu_cros_ec_usb_device_flush,
-			      SETUP_RETRY_CNT, NULL, error)) {
-		g_prefix_error (error, "failed to flush device to idle state: ");
+	if (!fu_cros_ec_usb_device_recovery (device, error))
 		return FALSE;
-	}
 
 	/* send start request */
 	if (!fu_device_retry (device, fu_cros_ec_usb_device_start_request,
@@ -481,8 +492,14 @@ fu_cros_ec_usb_device_transfer_block (FuDevice *device, gpointer user_data,
 					    sizeof(struct update_frame_header),
 					    NULL,
 					    0, FALSE,
-					    NULL, error))
+					    NULL, error)) {
+		/* flush all data from endpoint to recover in case of error */
+		if (!fu_cros_ec_usb_device_recovery (device, NULL)) {
+			g_debug ("failed to flush to idle");
+		}
+		g_prefix_error (error, "failed at sending header: ");
 		return FALSE;
+	}
 
 	/* send the block, chunk by chunk */
 	for (guint i = 0; i < chunks->len; i++) {
@@ -494,6 +511,12 @@ fu_cros_ec_usb_device_transfer_block (FuDevice *device, gpointer user_data,
 						    NULL,
 						    0, FALSE,
 						    NULL, error)) {
+			g_prefix_error (error, "failed at sending chunk: ");
+
+			/* flush all data from endpoint to recover in case of error */
+			if (!fu_cros_ec_usb_device_recovery (device, NULL)) {
+				g_debug ("failed to flush to idle");
+			}
 			return FALSE;
 		}
 	}
@@ -501,8 +524,14 @@ fu_cros_ec_usb_device_transfer_block (FuDevice *device, gpointer user_data,
 	/* get the reply */
 	if (!fu_cros_ec_usb_device_do_xfer (self, NULL, 0,
 					    (guint8 *)&reply, sizeof (reply),
-					    TRUE, &transfer_size, error))
+					    TRUE, &transfer_size, error)) {
+		g_prefix_error (error, "failed at reply: ");
+		/* flush all data from endpoint to recover in case of error */
+		if (!fu_cros_ec_usb_device_recovery (device, NULL)) {
+			g_debug ("failed to flush to idle");
+		}
 		return FALSE;
+	}
 	if (transfer_size == 0) {
 		g_set_error_literal (error,
 				     G_IO_ERROR,
@@ -641,19 +670,15 @@ static gboolean
 fu_cros_ec_usb_device_reset_to_ro (FuDevice *device, GError **error)
 {
 	guint8 response;
-	guint16 subcommand = UPDATE_EXTRA_CMD_STAY_IN_RO;
+	guint16	subcommand = UPDATE_EXTRA_CMD_IMMEDIATE_RESET;
 	guint8 command_body[2]; /* Max command body size. */
 	gsize command_body_size = 0;
 	gsize response_size = 1;
 
-	/* send subcommand to remain in RO */
-	if (!fu_cros_ec_usb_device_send_subcommand (device, subcommand, command_body,
-				     command_body_size, &response,
-				     &response_size, FALSE, error))
-		return FALSE;
-
-	response_size = 1;
-	subcommand = UPDATE_EXTRA_CMD_IMMEDIATE_RESET;
+	if (fu_device_has_custom_flag (device, "ro-written"))
+		fu_device_set_custom_flags (device, "ro-written,rebooting-to-ro");
+	else
+		fu_device_set_custom_flags (device, "rebooting-to-ro");
 	if (!fu_cros_ec_usb_device_send_subcommand  (device, subcommand, command_body,
 				     command_body_size, &response,
 				     &response_size, FALSE, error)) {
@@ -675,9 +700,19 @@ fu_cros_ec_usb_device_jump_to_rw (FuDevice *device)
 	gsize command_body_size = 0;
 	gsize response_size = 1;
 
-	fu_cros_ec_usb_device_send_subcommand  (device, subcommand, command_body,
-						command_body_size, &response,
-						&response_size, FALSE, NULL);
+	if (!fu_cros_ec_usb_device_send_subcommand (device, subcommand, command_body,
+						    command_body_size, &response,
+						    &response_size, FALSE, NULL)) {
+		/* bail out early here if subcommand failed, which is normal */
+		return TRUE;
+	}
+
+	/* Jump to rw may not work, so if we've reached here, initiate a
+	 * full reset using immediate reset */
+	subcommand = UPDATE_EXTRA_CMD_IMMEDIATE_RESET;
+	fu_cros_ec_usb_device_send_subcommand (device, subcommand, command_body,
+					       command_body_size, &response,
+					       &response_size, FALSE, NULL);
 
 	/* success */
 	return TRUE;
@@ -693,6 +728,48 @@ fu_cros_ec_usb_device_write_firmware (FuDevice *device,
 	GPtrArray *sections;
 	FuCrosEcFirmware *cros_ec_firmware = FU_CROS_EC_FIRMWARE (firmware);
 	gint num_txed_sections = 0;
+
+	if (fu_device_has_custom_flag (device, "rebooting-to-ro")) {
+		gsize response_size = 1;
+		guint8 response;
+		guint16 subcommand = UPDATE_EXTRA_CMD_STAY_IN_RO;
+		guint8 command_body[2]; /* Max command body size. */
+		gsize command_body_size = 0;
+		START_RESP start_resp;
+
+		if (!fu_cros_ec_usb_device_send_subcommand  (device, subcommand, command_body,
+							     command_body_size, &response,
+							     &response_size, FALSE, error)) {
+			g_prefix_error (error, "failed to send stay-in-ro subcommand: ");
+			return FALSE;
+		}
+
+		/* flush all data from endpoint to recover in case of error */
+		if (!fu_cros_ec_usb_device_recovery (device, error)) {
+			g_prefix_error (error, "failed to flush device to idle state: ");
+			return FALSE;
+		}
+
+		/* send start request */
+		if (!fu_device_retry (device, fu_cros_ec_usb_device_start_request,
+				      SETUP_RETRY_CNT, &start_resp, error)) {
+			g_prefix_error (error, "failed to send start request: ");
+			return FALSE;
+		}
+	}
+
+	if (fu_device_has_custom_flag (device, "rw-written") && self->in_bootloader) {
+		/*
+		 * we had previously written to the rw region but somehow
+		 * ended back up here while still in bootloader; this is
+		 * a transitory state due to the fact that we have to boot
+		 * through RO to get to RW. Set another write required to
+		 * allow the RO region to auto-jump to RW
+		 */
+		fu_device_set_custom_flags (device, "special,rw-written");
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_ANOTHER_WRITE_REQUIRED);
+		return TRUE;
+	}
 
 	sections = fu_cros_ec_firmware_get_sections (cros_ec_firmware);
 	if (sections == NULL) {
@@ -736,16 +813,22 @@ fu_cros_ec_usb_device_write_firmware (FuDevice *device,
 		return FALSE;
 	}
 
-	if (self->in_bootloader)
-		fu_device_set_custom_flags (device, "rw-written");
-	else if (fu_device_has_custom_flag (device, "rw-written"))
+	if (self->in_bootloader) {
+		if (fu_device_has_custom_flag (device, "ro-written"))
+			fu_device_set_custom_flags (device, "ro-written,rw-written");
+		else
+			fu_device_set_custom_flags (device, "rw-written");
+	} else if (fu_device_has_custom_flag (device, "rw-written")) {
 		fu_device_set_custom_flags (device, "ro-written,rw-written");
-	else
+	} else {
 		fu_device_set_custom_flags (device, "ro-written");
+	}
 
-	if (fu_device_has_custom_flag (device, "rw-written") &&
-	    !fu_device_has_custom_flag (device, "ro-written"))
+	/* logical XOR */
+	if (fu_device_has_custom_flag (device, "rw-written") !=
+	    fu_device_has_custom_flag (device, "ro-written"))
 		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_ANOTHER_WRITE_REQUIRED);
+
 	/* success */
 	return TRUE;
 }
@@ -796,14 +879,22 @@ fu_cros_ec_usb_device_attach (FuDevice *device, GError **error)
 {
 	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
 
-	if (!self->in_bootloader) {
-		/* already in rw, so skip jump to rw */
+	if (self->in_bootloader && fu_device_has_custom_flag (device, "special")) {
+		fu_device_set_remove_delay (device, CROS_EC_REMOVE_DELAY_RE_ENUMERATE);
+		fu_device_set_status (device, FWUPD_STATUS_DEVICE_RESTART);
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
 		return TRUE;
 	}
 
-	fu_device_set_remove_delay (device, FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
-	fu_cros_ec_usb_device_jump_to_rw (device);
-
+	fu_device_set_remove_delay (device, CROS_EC_REMOVE_DELAY_RE_ENUMERATE);
+	if (fu_device_has_custom_flag (device, "ro-written") &&
+	    !fu_device_has_custom_flag (device, "rw-written")) {
+		if (!fu_cros_ec_usb_device_reset_to_ro (device, error)) {
+			return FALSE;
+		}
+	} else {
+		fu_cros_ec_usb_device_jump_to_rw (device);
+	}
 	fu_device_set_status (device, FWUPD_STATUS_DEVICE_RESTART);
 	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
 
@@ -812,18 +903,28 @@ fu_cros_ec_usb_device_attach (FuDevice *device, GError **error)
 }
 
 static gboolean
-fu_cros_ec_usb_device_detach (FuDevice *self, GError **error)
+fu_cros_ec_usb_device_detach (FuDevice *device, GError **error)
 {
-	if (fu_device_has_custom_flag (self, "rw-written") &&
-	    !fu_device_has_custom_flag (self, "ro-written"))
+	FuCrosEcUsbDevice *self = FU_CROS_EC_USB_DEVICE (device);
+
+	if (fu_device_has_custom_flag (device, "rw-written") &&
+	    !fu_device_has_custom_flag (device, "ro-written"))
 		return TRUE;
 
-	fu_device_set_remove_delay (self, FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
-	if (!fu_cros_ec_usb_device_reset_to_ro (self, error))
-		return FALSE;
+	if (self->in_bootloader) {
+		g_debug ("skipping immediate reboot in case of already in bootloader");
+		/* in RO so skip reboot */
+		return TRUE;
+	} else if (self->targ.common.flash_protection != 0x0) {
+		/* in RW, and RO region is write protected, so jump to RO */
+		fu_device_set_custom_flags (device, "ro-written");
+		fu_device_set_remove_delay (device, CROS_EC_REMOVE_DELAY_RE_ENUMERATE);
+		if (!fu_cros_ec_usb_device_reset_to_ro (device, error))
+			return FALSE;
 
-	fu_device_set_status (self, FWUPD_STATUS_DEVICE_RESTART);
-	fu_device_add_flag (self, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
+		fu_device_set_status (device, FWUPD_STATUS_DEVICE_RESTART);
+		fu_device_add_flag (device, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
+	}
 
 	/* success */
 	return TRUE;

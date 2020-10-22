@@ -26,6 +26,7 @@ _fwupdtool_cmd_list=(
 	'monitor'
 	'reinstall'
 	'security'
+	'switch-branch'
 	'self-sign'
 	'smbios-dump'
 	'attach'
@@ -51,6 +52,9 @@ _fwupdtool_opts=(
 	'--filter'
 	'--disable-ssl-strict'
 	'--no-safety-check'
+	'--ignore-checksum'
+	'--ignore-vid-pid'
+	'--ignore-power'
 )
 
 _show_filters()

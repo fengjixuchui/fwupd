@@ -419,14 +419,16 @@ fu_vli_usbhub_device_guess_kind (FuVliUsbhubDevice *self, GError **error)
 		g_prefix_error (error, "Read_820Q7Q8 failed: ");
 		return FALSE;
 	}
-	g_debug ("chipver = 0x%02x", chipver);
-	g_debug ("chipver2 = 0x%02x", chipver2);
-	g_debug ("b811P812 = 0x%02x", b811P812);
-	g_debug ("chipid1 = 0x%02x", chipid1);
-	g_debug ("chipid2 = 0x%02x", chipid2);
-	g_debug ("chipid12 = 0x%02x", chipid12);
-	g_debug ("chipid22 = 0x%02x", chipid22);
-	g_debug ("b820Q7Q8 = 0x%02x", b820Q7Q8);
+	if (g_getenv ("FWUPD_VLI_USBHUB_VERBOSE") != NULL) {
+		g_debug ("chipver = 0x%02x", chipver);
+		g_debug ("chipver2 = 0x%02x", chipver2);
+		g_debug ("b811P812 = 0x%02x", b811P812);
+		g_debug ("chipid1 = 0x%02x", chipid1);
+		g_debug ("chipid2 = 0x%02x", chipid2);
+		g_debug ("chipid12 = 0x%02x", chipid12);
+		g_debug ("chipid22 = 0x%02x", chipid22);
+		g_debug ("b820Q7Q8 = 0x%02x", b820Q7Q8);
+	}
 
 	if (chipid2 == 0x35 && chipid1 == 0x07) {
 		fu_vli_device_set_kind (FU_VLI_DEVICE (self), FU_VLI_DEVICE_KIND_VL210);
@@ -496,43 +498,22 @@ fu_vli_usbhub_device_probe (FuDevice *device, GError **error)
 static gboolean
 fu_vli_usbhub_device_pd_setup (FuVliUsbhubDevice *self, GError **error)
 {
-	FuVliPdHdr hdr = { 0x0 };
 	g_autoptr(FuDevice) dev = NULL;
 	g_autoptr(GError) error_local = NULL;
 
-	/* legacy location */
-	if (!fu_vli_device_spi_read_block (FU_VLI_DEVICE (self),
-					   VLI_USBHUB_FLASHMAP_ADDR_PD_LEGACY +
-					   VLI_USBHUB_PD_FLASHMAP_ADDR_LEGACY,
-					   (guint8 *) &hdr, sizeof(hdr), error)) {
-		g_prefix_error (error, "failed to read legacy PD header");
-		return FALSE;
-	}
-
-	/* new location */
-	if (GUINT16_FROM_LE (hdr.vid) != 0x2109) {
-		g_debug ("PD VID was 0x%04x trying new location",
-			 GUINT16_FROM_LE (hdr.vid));
-		if (!fu_vli_device_spi_read_block (FU_VLI_DEVICE (self),
-						   VLI_USBHUB_FLASHMAP_ADDR_PD +
-						   VLI_USBHUB_PD_FLASHMAP_ADDR,
-						   (guint8 *) &hdr, sizeof(hdr), error)) {
-			g_prefix_error (error, "failed to read PD header");
-			return FALSE;
-		}
-	}
-
-	/* just empty space */
-	if (hdr.fwver == G_MAXUINT32) {
-		g_debug ("no PD device header found");
-		return TRUE;
-	}
-
 	/* add child */
-	dev = fu_vli_usbhub_pd_device_new (&hdr);
-	fu_device_set_quirks (dev, fu_device_get_quirks (FU_DEVICE (self)));
-	if (!fu_device_probe (dev, &error_local)) {
-		g_warning ("cannot create PD device: %s", error_local->message);
+	dev = fu_vli_usbhub_pd_device_new (self);
+	if (!fu_device_probe (dev, error))
+		return FALSE;
+	if (!fu_device_setup (dev, &error_local)) {
+		if (g_error_matches (error_local,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_FOUND)) {
+			g_debug ("%s", error_local->message);
+		} else {
+			g_warning ("cannot create PD device: %s",
+				   error_local->message);
+		}
 		return TRUE;
 	}
 	fu_device_add_child (FU_DEVICE (self), dev);

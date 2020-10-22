@@ -2001,6 +2001,24 @@ fu_byte_array_append_uint32 (GByteArray *array, guint32 data, FuEndianType endia
 }
 
 /**
+ * fu_byte_array_set_size:
+ * @array: a #GByteArray
+ * @length:  the new size of the GByteArray
+ *
+ * Sets the size of the GByteArray, expanding it with NULs if necessary.
+ *
+ * Since: 1.5.0
+ **/
+void
+fu_byte_array_set_size (GByteArray *array, guint length)
+{
+	guint oldlength = array->len;
+	g_byte_array_set_size (array, length);
+	if (length > oldlength)
+		memset (array->data + oldlength, 0x0, length - oldlength);
+}
+
+/**
  * fu_common_kernel_locked_down:
  *
  * Determines if kernel lockdown in effect
@@ -2325,7 +2343,7 @@ fu_common_get_esp_for_path (const gchar *esp_path, GError **error)
 		return NULL;
 	for (guint i = 0; i < volumes->len; i++) {
 		FuVolume *vol = g_ptr_array_index (volumes, i);
-		g_autofree gchar *vol_basename = g_path_get_basename (fu_volume_get_id (vol));
+		g_autofree gchar *vol_basename = g_path_get_basename (fu_volume_get_mount_point (vol));
 		if (g_strcmp0 (basename, vol_basename) == 0)
 			return g_object_ref (vol);
 	}

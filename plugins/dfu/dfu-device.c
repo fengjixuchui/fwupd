@@ -1270,7 +1270,7 @@ dfu_device_probe (FuUsbDevice *device, GError **error)
 	/* hardware rom Jabra literally reboots if you try to retry a failed
 	 * write -- there's no way to avoid blocking the daemon like this... */
 	if (fu_device_has_custom_flag (FU_DEVICE (device), "attach-extra-reset"))
-		g_usleep (10 * G_USEC_PER_SEC);
+		fu_device_sleep_with_progress (FU_DEVICE (self), 10); /* seconds */
 
 	/* success */
 	return TRUE;
@@ -1684,6 +1684,15 @@ dfu_device_dump_firmware (FuDevice *device, GError **error)
 {
 	DfuDevice *self = DFU_DEVICE (device);
 	g_autoptr(DfuFirmware) dfu_firmware = NULL;
+	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	/* require detach -> attach */
+	locker = fu_device_locker_new_full (device,
+					    (FuDeviceLockerFunc) fu_device_detach,
+					    (FuDeviceLockerFunc) fu_device_attach,
+					    error);
+	if (locker == NULL)
+		return NULL;
 
 	/* get data from hardware */
 	g_debug ("uploading from device->host");
@@ -1717,7 +1726,7 @@ dfu_device_write_firmware (FuDevice *device,
 	if (!dfu_device_refresh_and_clear (self, error))
 		return FALSE;
 
-	if (flags & FWUPD_INSTALL_FLAG_FORCE) {
+	if (flags & FWUPD_INSTALL_FLAG_IGNORE_VID_PID) {
 		transfer_flags |= DFU_TARGET_TRANSFER_FLAG_WILDCARD_VID;
 		transfer_flags |= DFU_TARGET_TRANSFER_FLAG_WILDCARD_PID;
 	}
