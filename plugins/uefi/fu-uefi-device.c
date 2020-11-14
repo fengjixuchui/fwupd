@@ -560,7 +560,7 @@ fu_uefi_device_write_firmware (FuDevice *device,
 		return FALSE;
 
 	/* save the blob to the ESP */
-	directory = fu_uefi_get_esp_path_for_os (esp_path);
+	directory = fu_uefi_get_esp_path_for_os (device, esp_path);
 	basename = g_strdup_printf ("fwupd-%s.cap", self->fw_class);
 	fn = g_build_filename (directory, "fw", basename, NULL);
 	if (!fu_common_mkdir_parent (fn, error))
@@ -570,6 +570,10 @@ fu_uefi_device_write_firmware (FuDevice *device,
 		return FALSE;
 	if (!fu_common_set_contents_bytes (fn, fixed_fw, error))
 		return FALSE;
+
+	/* delete the logs to save space; use fwupdate to debug the EFI binary */
+	fu_efivar_delete (FU_EFIVAR_GUID_FWUPDATE, "FWUPDATE_VERBOSE", NULL);
+	fu_efivar_delete (FU_EFIVAR_GUID_FWUPDATE, "FWUPDATE_DEBUG_LOG", NULL);
 
 	/* set the blob header shared with fwupd.efi */
 	if (!fu_uefi_device_write_update_info (self, fn, varname, self->fw_class, error))
@@ -584,7 +588,7 @@ fu_uefi_device_write_firmware (FuDevice *device,
 	/* some legacy devices use the old name to deduplicate boot entries */
 	if (fu_device_has_custom_flag (device, "use-legacy-bootmgr-desc"))
 		bootmgr_desc = "Linux-Firmware-Updater";
-	if (!fu_uefi_bootmgr_bootnext (esp_path, bootmgr_desc, flags, error))
+	if (!fu_uefi_bootmgr_bootnext (device, esp_path, bootmgr_desc, flags, error))
 		return FALSE;
 
 	/* success! */
@@ -671,6 +675,7 @@ fu_uefi_device_probe (FuDevice *device, GError **error)
 	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_NEEDS_REBOOT);
 	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_REQUIRE_AC);
 	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_MD_SET_VERFMT);
+	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_MD_SET_ICON);
 
 	/* add icons */
 	if (self->kind == FU_UEFI_DEVICE_KIND_DEVICE_FIRMWARE) {

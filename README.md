@@ -3,8 +3,6 @@ fwupd
 [![Build Status](https://travis-ci.org/fwupd/fwupd.png?branch=master)](https://travis-ci.org/fwupd/fwupd)
 [![Coverity Scan Build Status](https://scan.coverity.com/projects/10744/badge.svg)](https://scan.coverity.com/projects/10744)
 
-[![Get it from the Snap Store](https://snapcraft.io/static/images/badges/en/snap-store-white.svg)](https://snapcraft.io/fwupd)
-
 This project aims to make updating firmware on Linux automatic, safe and reliable.
 
 Additional information is available at the website: https://fwupd.org/
@@ -12,6 +10,21 @@ Additional information is available at the website: https://fwupd.org/
 ## Compiling
 
 The most up to date compilation instructions are available in the [Wiki](https://github.com/fwupd/fwupd/wiki/Compilation).
+
+**NOTE:** In most cases end users should never compile fwupd from scratch; it's a
+complicated project with dozens of dependencies (and as many configuration options)
+and there's just too many things that can go wrong.
+
+Users should just have fwupd installed and updated by their distro, managed and
+tested by the package maintainer.
+The distribution will have also done some testing with how fwupd interacts with
+other software on your system, for instance using GNOME Software.
+
+Installing fwupd using [Snap](https://github.com/fwupd/fwupd/wiki/fwupd-snap)
+or using [Flatpak](https://github.com/fwupd/fwupd/wiki/fwupd-flatpak) might be
+useful to update a specific device on the command line that needs a bleeding
+edge fwupd version, but it should not be considered as a replacement to the
+distro-provided system version.
 
 LVFS
 ----
@@ -78,7 +91,7 @@ Enterprise use
 The flow of updates can be controlled in the enterprise using the
 "approved updates" feature. This allows the domain administrator to filter
 the possible updates from a central server (e.g. the LVFS, or a mirror)
-to only firmware that have been tested specifically in your organisation.
+to only firmware that have been tested specifically in your organization.
 
 The list of approved updates can be enabled by adding `ApprovalRequired=true`
 to the remote configuration file, e.g. `lvfs.conf`. Once enabled, the
@@ -103,7 +116,7 @@ Other frontends
  After the firmware has been downloaded a popup will be displayed in GNOME
  Software to perform the update.
 
-2. [KDE Discover](https://userbase.kde.org/Discover) is the software centre,
+2. [KDE Discover](https://userbase.kde.org/Discover) is the software center,
  generally bundled with KDE Plasma. With the release of
  [KDE Plasma 5.14](https://www.kde.org/announcements/plasma-5.14.0.php),
  a new fwupd backend has been implemented in KDE Discover for firmware updates.

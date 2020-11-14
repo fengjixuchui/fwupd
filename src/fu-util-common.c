@@ -1111,6 +1111,10 @@ fu_util_device_flag_to_string (guint64 device_flag)
 		/* skip */
 		return NULL;
 	}
+	if (device_flag == FWUPD_DEVICE_FLAG_MD_SET_ICON) {
+		/* skip */
+		return NULL;
+	}
 	if (device_flag == FWUPD_DEVICE_FLAG_SKIPS_RESTART) {
 		/* skip */
 		return NULL;
@@ -1738,8 +1742,6 @@ fu_util_security_attrs_to_string (GPtrArray *attrs, FuSecurityAttrToStringFlags 
 {
 	FwupdSecurityAttrFlags flags = FWUPD_SECURITY_ATTR_FLAG_NONE;
 	const FwupdSecurityAttrFlags hpi_suffixes[] = {
-		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_UPDATES,
-		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ATTESTATION,
 		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE,
 		FWUPD_SECURITY_ATTR_FLAG_NONE,
 	};
@@ -1992,4 +1994,16 @@ fu_util_switch_branch_warning (FwupdDevice *dev,
 		}
 	}
 	return TRUE;
+}
+
+void
+fu_util_show_unsupported_warn (void)
+{
+#ifndef SUPPORTED_BUILD
+	g_autofree gchar *fmt = NULL;
+	/* TRANSLATORS: this is a prefix on the console */
+	fmt = fu_util_term_format (_("WARNING:"), FU_UTIL_CLI_COLOR_YELLOW);
+	/* TRANSLATORS: unsupported build of the package */
+	g_printerr ("%s %s\n", fmt, _("This package has not been validated, it may not work properly."));
+#endif
 }

@@ -669,3 +669,21 @@ LIBFWUPDPLUGIN_1.5.0 {
     fu_udev_device_get_subsystem_vendor;
   local: *;
 } LIBFWUPDPLUGIN_1.4.7;
+
+LIBFWUPDPLUGIN_1.5.1 {
+  global:
+    fu_common_get_volume_by_device;
+    fu_common_get_volume_by_devnum;
+    fu_device_add_possible_plugin;
+    fu_efivar_space_used;
+    fu_volume_is_encrypted;
+  local: *;
+} LIBFWUPDPLUGIN_1.5.0;
+
+LIBFWUPDPLUGIN_1.5.2 {
+  global:
+    fu_hid_device_add_flag;
+    fu_volume_get_id_type;
+    fu_volume_is_internal;
+  local: *;
+} LIBFWUPDPLUGIN_1.5.1;

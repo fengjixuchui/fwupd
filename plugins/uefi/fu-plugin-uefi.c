@@ -241,7 +241,7 @@ fu_plugin_uefi_write_splash_data (FuPlugin *plugin,
 
 	/* save to a predicatable filename */
 	esp_path = fu_volume_get_mount_point (data->esp);
-	directory = fu_uefi_get_esp_path_for_os (esp_path);
+	directory = fu_uefi_get_esp_path_for_os (device, esp_path);
 	basename = g_strdup_printf ("fwupd-%s.cap", FU_EFIVAR_GUID_UX_CAPSULE);
 	fn = g_build_filename (directory, "fw", basename, NULL);
 	if (!fu_common_mkdir_parent (fn, error))
@@ -425,6 +425,7 @@ static void
 fu_plugin_uefi_load_config (FuPlugin *plugin, FuDevice *device)
 {
 	gboolean disable_shim;
+	gboolean fallback_removable_path;
 	guint64 sz_reqd = FU_UEFI_COMMON_REQUIRED_ESP_FREE_SPACE;
 	g_autofree gchar *require_esp_free_space = NULL;
 
@@ -439,6 +440,12 @@ fu_plugin_uefi_load_config (FuPlugin *plugin, FuDevice *device)
 	fu_device_set_metadata_boolean (device,
 					"RequireShimForSecureBoot",
 					!disable_shim);
+
+	/* check if using UEFI removeable path */
+	fallback_removable_path = fu_plugin_get_config_value_boolean (plugin, "FallbacktoRemovablePath");
+	fu_device_set_metadata_boolean (device,
+					"FallbacktoRemovablePath",
+					fallback_removable_path);
 }
 
 static void
@@ -608,7 +615,9 @@ gboolean
 fu_plugin_startup (FuPlugin *plugin, GError **error)
 {
 	FuPluginData *data = fu_plugin_get_data (plugin);
+	guint64 nvram_total;
 	g_autofree gchar *esp_path = NULL;
+	g_autofree gchar *nvram_total_str = NULL;
 	g_autoptr(GError) error_local = NULL;
 
 	/* some platforms have broken SMBIOS data */
@@ -632,6 +641,11 @@ fu_plugin_startup (FuPlugin *plugin, GError **error)
 	/* are the EFI dirs set up so we can update each device */
 	if (!fu_efivar_supported (error))
 		return FALSE;
+	nvram_total = fu_efivar_space_used (error);
+	if (nvram_total == G_MAXUINT64)
+		return FALSE;
+	nvram_total_str = g_format_size_full (nvram_total, G_FORMAT_SIZE_LONG_FORMAT);
+	fu_plugin_add_report_metadata (plugin, "EfivarNvramUsed", nvram_total_str);
 
 	/* override the default ESP path */
 	esp_path = fu_plugin_get_config_value (plugin, "OverrideESPMountPoint");

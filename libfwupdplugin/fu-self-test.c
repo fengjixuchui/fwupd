@@ -221,14 +221,14 @@ fu_device_metadata_func (void)
 	g_assert_false (fu_device_get_metadata_boolean (device, "unknown"));
 
 	/* integer */
-	fu_device_set_metadata_integer (device, "dum", 12345);
-	g_assert_cmpstr (fu_device_get_metadata (device, "dum"), ==, "12345");
-	g_assert_cmpint (fu_device_get_metadata_integer (device, "dum"), ==, 12345);
+	fu_device_set_metadata_integer (device, "bam", 12345);
+	g_assert_cmpstr (fu_device_get_metadata (device, "bam"), ==, "12345");
+	g_assert_cmpint (fu_device_get_metadata_integer (device, "bam"), ==, 12345);
 	g_assert_cmpint (fu_device_get_metadata_integer (device, "unknown"), ==, G_MAXUINT);
 
 	/* broken integer */
-	fu_device_set_metadata (device, "dum", "123junk");
-	g_assert_cmpint (fu_device_get_metadata_integer (device, "dum"), ==, G_MAXUINT);
+	fu_device_set_metadata (device, "bam", "123junk");
+	g_assert_cmpint (fu_device_get_metadata_integer (device, "bam"), ==, G_MAXUINT);
 	fu_device_set_metadata (device, "huge", "4294967296"); /* not 32 bit */
 	g_assert_cmpint (fu_device_get_metadata_integer (device, "huge"), ==, G_MAXUINT);
 }
@@ -1066,6 +1066,19 @@ fu_device_poll_func (void)
 }
 
 static void
+fu_device_func (void)
+{
+	g_autoptr(FuDevice) device = fu_device_new ();
+	g_autoptr(GPtrArray) possible_plugins = NULL;
+
+	/* only add one plugin name of the same type */
+	fu_device_add_possible_plugin (device, "test");
+	fu_device_add_possible_plugin (device, "test");
+	possible_plugins = fu_device_get_possible_plugins (device);
+	g_assert_cmpint (possible_plugins->len, ==, 1);
+}
+
+static void
 fu_device_flags_func (void)
 {
 	g_autoptr(FuDevice) device = fu_device_new ();
@@ -1824,6 +1837,7 @@ fu_efivar_func (void)
 	gboolean ret;
 	gsize sz = 0;
 	guint32 attr = 0;
+	guint64 total;
 	g_autofree guint8 *data = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) names = NULL;
@@ -1832,6 +1846,11 @@ fu_efivar_func (void)
 	ret = fu_efivar_supported (&error);
 	g_assert_no_error (error);
 	g_assert_true (ret);
+
+	/* check we can get the space used */
+	total = fu_efivar_space_used (&error);
+	g_assert_no_error (error);
+	g_assert_cmpint (total, ==, 0x2000);
 
 	/* check existing keys */
 	g_assert_false (fu_efivar_exists (FU_EFIVAR_GUID_EFI_GLOBAL, "NotGoingToExist"));
@@ -2041,13 +2060,11 @@ fu_security_attrs_hsi_func (void)
 	/* add updates and attestation */
 	attr = fwupd_security_attr_new (FWUPD_SECURITY_ATTR_ID_FWUPD_UPDATES);
 	fwupd_security_attr_set_plugin (attr, "test");
-	fwupd_security_attr_add_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_UPDATES);
-	fwupd_security_attr_add_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ATTESTATION);
 	fwupd_security_attr_add_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS);
 	fwupd_security_attr_set_url (attr, "http://test");
 	fu_security_attrs_append (attrs, attr);
 	hsi6 = fu_security_attrs_calculate_hsi (attrs, FU_SECURITY_ATTRS_FLAG_NONE);
-	g_assert_cmpstr (hsi6, ==, "HSI:3+UA");
+	g_assert_cmpstr (hsi6, ==, "HSI:3");
 	g_clear_object (&attr);
 
 	/* add issue that was uncool */
@@ -2057,7 +2074,7 @@ fu_security_attrs_hsi_func (void)
 	fwupd_security_attr_set_url (attr, "http://test");
 	fu_security_attrs_append (attrs, attr);
 	hsi7 = fu_security_attrs_calculate_hsi (attrs, FU_SECURITY_ATTRS_FLAG_NONE);
-	g_assert_cmpstr (hsi7, ==, "HSI:3+UA!");
+	g_assert_cmpstr (hsi7, ==, "HSI:3!");
 	g_clear_object (&attr);
 
 	/* show version in the attribute */
@@ -2067,7 +2084,7 @@ fu_security_attrs_hsi_func (void)
 	fwupd_security_attr_set_url (attr, "http://test");
 	fu_security_attrs_append (attrs, attr);
 	hsi8 = fu_security_attrs_calculate_hsi (attrs, FU_SECURITY_ATTRS_FLAG_ADD_VERSION);
-	expected_hsi8 = g_strdup_printf ("HSI:3+UA! (v%d.%d.%d)",
+	expected_hsi8 = g_strdup_printf ("HSI:3! (v%d.%d.%d)",
 					FWUPD_MAJOR_VERSION,
 					FWUPD_MINOR_VERSION,
 					FWUPD_MICRO_VERSION);
@@ -2132,6 +2149,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/firmware{dfu}", fu_firmware_dfu_func);
 	g_test_add_func ("/fwupd/archive{invalid}", fu_archive_invalid_func);
 	g_test_add_func ("/fwupd/archive{cab}", fu_archive_cab_func);
+	g_test_add_func ("/fwupd/device", fu_device_func);
 	g_test_add_func ("/fwupd/device{flags}", fu_device_flags_func);
 	g_test_add_func ("/fwupd/device{parent}", fu_device_parent_func);
 	g_test_add_func ("/fwupd/device{incorporate}", fu_device_incorporate_func);

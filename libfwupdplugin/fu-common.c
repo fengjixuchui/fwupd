@@ -35,11 +35,12 @@
 #include "fu-common.h"
 #include "fu-volume-private.h"
 
-#define UDISKS_DBUS_SERVICE		"org.freedesktop.UDisks2"
-#define UDISKS_DBUS_PATH		"/org/freedesktop/UDisks2/Manager"
-#define UDISKS_DBUS_MANAGER_INTERFACE	"org.freedesktop.UDisks2.Manager"
-#define UDISKS_DBUS_PART_INTERFACE 	"org.freedesktop.UDisks2.Partition"
-#define UDISKS_DBUS_FILE_INTERFACE	"org.freedesktop.UDisks2.Filesystem"
+#define UDISKS_DBUS_SERVICE			"org.freedesktop.UDisks2"
+#define UDISKS_DBUS_PATH			"/org/freedesktop/UDisks2/Manager"
+#define UDISKS_DBUS_MANAGER_INTERFACE		"org.freedesktop.UDisks2.Manager"
+#define UDISKS_DBUS_INTERFACE_PARTITION 	"org.freedesktop.UDisks2.Partition"
+#define UDISKS_DBUS_INTERFACE_FILESYSTEM	"org.freedesktop.UDisks2.Filesystem"
+#define UDISKS_DBUS_INTERFACE_BLOCK		"org.freedesktop.UDisks2.Block"
 
 /**
  * SECTION:fu-common
@@ -2164,7 +2165,7 @@ fu_common_is_live_media (void)
 }
 
 static GPtrArray *
-fu_common_get_block_devices (GDBusConnection *connection, GError **error)
+fu_common_get_block_devices (GError **error)
 {
 	GVariantBuilder builder;
 	const gchar *obj;
@@ -2172,7 +2173,13 @@ fu_common_get_block_devices (GDBusConnection *connection, GError **error)
 	g_autoptr(GDBusProxy) proxy = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(GVariantIter) iter = NULL;
+	g_autoptr(GDBusConnection) connection = NULL;
 
+	connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, error);
+	if (connection == NULL) {
+		g_prefix_error (error, "failed to get system bus: ");
+		return NULL;
+	}
 	proxy = g_dbus_proxy_new_sync (connection,
 				       G_DBUS_PROXY_FLAGS_NONE, NULL,
 				       UDISKS_DBUS_SERVICE,
@@ -2189,12 +2196,31 @@ fu_common_get_block_devices (GDBusConnection *connection, GError **error)
 					  g_variant_new ("(a{sv})", &builder),
 					  G_DBUS_CALL_FLAGS_NONE,
 					  -1, NULL, error);
-	if (output == NULL)
+	if (output == NULL) {
+		if (error != NULL)
+			g_dbus_error_strip_remote_error (*error);
+		g_prefix_error (error, "failed to call %s.%s(): ",
+				UDISKS_DBUS_SERVICE,
+				"GetBlockDevices");
 		return NULL;
-	devices = g_ptr_array_new_with_free_func (g_free);
+	}
+	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	g_variant_get (output, "(ao)", &iter);
-	while (g_variant_iter_next (iter, "&o", &obj))
-		g_ptr_array_add (devices, g_strdup (obj));
+	while (g_variant_iter_next (iter, "&o", &obj)) {
+		g_autoptr(GDBusProxy) proxy_blk = NULL;
+		proxy_blk = g_dbus_proxy_new_sync (connection,
+						   G_DBUS_PROXY_FLAGS_NONE, NULL,
+						   UDISKS_DBUS_SERVICE,
+						   obj,
+						   UDISKS_DBUS_INTERFACE_BLOCK,
+						   NULL, error);
+		if (proxy_blk == NULL) {
+			g_prefix_error (error, "failed to initialize d-bus proxy for %s: ", obj);
+			return NULL;
+		}
+		g_ptr_array_add (devices, g_steal_pointer (&proxy_blk));
+	}
+
 
 	return g_steal_pointer (&devices);
 }
@@ -2204,9 +2230,7 @@ fu_common_get_block_devices (GDBusConnection *connection, GError **error)
  * @kind: A volume kind, typically a GUID
  * @error: A #GError or NULL
  *
- * Call into the plugin's get results routine
- *
- * Finds all volumes of a specific type
+ * Finds all volumes of a specific partition type
  *
  * Returns: (transfer container) (element-type FuVolume): a #GPtrArray, or %NULL if the kind was not found
  *
@@ -2215,35 +2239,30 @@ fu_common_get_block_devices (GDBusConnection *connection, GError **error)
 GPtrArray *
 fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 {
-	g_autoptr(GDBusConnection) connection = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(GPtrArray) volumes = NULL;
 
-	connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, error);
-	if (connection == NULL) {
-		g_prefix_error (error, "failed to get system bus: ");
-		return NULL;
-	}
-	devices = fu_common_get_block_devices (connection, error);
+	devices = fu_common_get_block_devices (error);
 	if (devices == NULL)
 		return NULL;
 	volumes = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	for (guint i = 0; i < devices->len; i++) {
-		const gchar *obj = g_ptr_array_index (devices, i);
+		GDBusProxy *proxy_blk = g_ptr_array_index (devices, i);
 		const gchar *type_str;
+		g_autoptr(FuVolume) vol = NULL;
 		g_autoptr(GDBusProxy) proxy_part = NULL;
-		g_autoptr(GDBusProxy) proxy_file = NULL;
-		g_autoptr(GError) error_local = NULL;
+		g_autoptr(GDBusProxy) proxy_fs = NULL;
 		g_autoptr(GVariant) val = NULL;
 
-		proxy_part = g_dbus_proxy_new_sync (connection,
+		proxy_part = g_dbus_proxy_new_sync (g_dbus_proxy_get_connection (proxy_blk),
 						    G_DBUS_PROXY_FLAGS_NONE, NULL,
 						    UDISKS_DBUS_SERVICE,
-						    obj,
-						    UDISKS_DBUS_PART_INTERFACE,
+						    g_dbus_proxy_get_object_path (proxy_blk),
+						    UDISKS_DBUS_INTERFACE_PARTITION,
 						    NULL, error);
 		if (proxy_part == NULL) {
-			g_prefix_error (error, "failed to initialize d-bus proxy %s: ", obj);
+			g_prefix_error (error, "failed to initialize d-bus proxy %s: ",
+					g_dbus_proxy_get_object_path (proxy_blk));
 			return NULL;
 		}
 		val = g_dbus_proxy_get_cached_property (proxy_part, "Type");
@@ -2251,20 +2270,28 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 			continue;
 
 		g_variant_get (val, "&s", &type_str);
-		g_debug ("device %s, type: %s", obj, type_str);
-		if (g_strcmp0 (type_str, kind) != 0)
-			continue;
-		proxy_file = g_dbus_proxy_new_sync (connection,
-						    G_DBUS_PROXY_FLAGS_NONE, NULL,
-						    UDISKS_DBUS_SERVICE,
-						    obj,
-						    UDISKS_DBUS_FILE_INTERFACE,
-						    NULL, error);
-		if (proxy_file == NULL) {
-			g_prefix_error (error, "failed to initialize d-bus proxy %s: ", obj);
+		proxy_fs = g_dbus_proxy_new_sync (g_dbus_proxy_get_connection (proxy_blk),
+						  G_DBUS_PROXY_FLAGS_NONE, NULL,
+						  UDISKS_DBUS_SERVICE,
+						  g_dbus_proxy_get_object_path (proxy_blk),
+						  UDISKS_DBUS_INTERFACE_FILESYSTEM,
+						  NULL, error);
+		if (proxy_fs == NULL) {
+			g_prefix_error (error, "failed to initialize d-bus proxy %s: ",
+					g_dbus_proxy_get_object_path (proxy_blk));
 			return NULL;
 		}
-		g_ptr_array_add (volumes, fu_volume_new_from_proxy (proxy_file));
+		vol = g_object_new (FU_TYPE_VOLUME,
+				    "proxy-block", proxy_blk,
+				    "proxy-filesystem", proxy_fs,
+				    NULL);
+		g_debug ("device %s, type: %s, internal: %d, fs: %s",
+			 g_dbus_proxy_get_object_path (proxy_blk), type_str,
+			 fu_volume_is_internal (vol),
+			 fu_volume_get_id_type (vol));
+		if (g_strcmp0 (type_str, kind) != 0)
+			continue;
+		g_ptr_array_add (volumes, g_steal_pointer (&vol));
 	}
 	if (volumes->len == 0) {
 		g_set_error (error,
@@ -2274,6 +2301,90 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 		return NULL;
 	}
 	return g_steal_pointer (&volumes);
+}
+
+/**
+ * fu_common_get_volume_by_device:
+ * @device: A device string, typcically starting with `/dev/`
+ * @error: A #GError or NULL
+ *
+ * Finds the first volume from the specified device.
+ *
+ * Returns: (transfer full): a #GPtrArray, or %NULL if the kind was not found
+ *
+ * Since: 1.5.1
+ **/
+FuVolume *
+fu_common_get_volume_by_device (const gchar *device, GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+
+	/* find matching block device */
+	devices = fu_common_get_block_devices (error);
+	if (devices == NULL)
+		return NULL;
+	for (guint i = 0; i < devices->len; i++) {
+		GDBusProxy *proxy_blk = g_ptr_array_index (devices, i);
+		g_autoptr(GVariant) val = NULL;
+		val = g_dbus_proxy_get_cached_property (proxy_blk, "Device");
+		if (val == NULL)
+			continue;
+		if (g_strcmp0 (g_variant_get_bytestring (val), device) == 0) {
+			return g_object_new (FU_TYPE_VOLUME,
+					     "proxy-block", proxy_blk,
+					     NULL);
+		}
+	}
+
+	/* failed */
+	g_set_error (error,
+		     G_IO_ERROR,
+		     G_IO_ERROR_NOT_FOUND,
+		     "no volumes for device %s",
+		     device);
+	return NULL;
+}
+
+/**
+ * fu_common_get_volume_by_devnum:
+ * @devnum: A device number
+ * @error: A #GError or NULL
+ *
+ * Finds the first volume from the specified device.
+ *
+ * Returns: (transfer full): a #GPtrArray, or %NULL if the kind was not found
+ *
+ * Since: 1.5.1
+ **/
+FuVolume *
+fu_common_get_volume_by_devnum (guint32 devnum, GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+
+	/* find matching block device */
+	devices = fu_common_get_block_devices (error);
+	if (devices == NULL)
+		return NULL;
+	for (guint i = 0; i < devices->len; i++) {
+		GDBusProxy *proxy_blk = g_ptr_array_index (devices, i);
+		g_autoptr(GVariant) val = NULL;
+		val = g_dbus_proxy_get_cached_property (proxy_blk, "DeviceNumber");
+		if (val == NULL)
+			continue;
+		if (devnum == g_variant_get_uint64 (val)) {
+			return g_object_new (FU_TYPE_VOLUME,
+					     "proxy-block", proxy_blk,
+					     NULL);
+		}
+	}
+
+	/* failed */
+	g_set_error (error,
+		     G_IO_ERROR,
+		     G_IO_ERROR_NOT_FOUND,
+		     "no volumes for devnum %u",
+		     devnum);
+	return NULL;
 }
 
 /**
@@ -2292,18 +2403,44 @@ fu_common_get_esp_default (GError **error)
 	const gchar *path_tmp;
 	g_autoptr(GPtrArray) volumes_fstab = g_ptr_array_new ();
 	g_autoptr(GPtrArray) volumes_mtab = g_ptr_array_new ();
+	g_autoptr(GPtrArray) volumes_vfat = g_ptr_array_new ();
 	g_autoptr(GPtrArray) volumes = NULL;
+	g_autoptr(GError) error_local = NULL;
 
 	/* for the test suite use local directory for ESP */
 	path_tmp = g_getenv ("FWUPD_UEFI_ESP_PATH");
 	if (path_tmp != NULL)
 		return fu_volume_new_from_mount_path (path_tmp);
 
-	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
-	if (volumes == NULL)
-		return NULL;
+	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, &error_local);
+	if (volumes == NULL) {
+		g_debug ("%s, falling back to %s", error_local->message, FU_VOLUME_KIND_BDP);
+		volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_BDP, error);
+		if (volumes == NULL) {
+			g_prefix_error (error, "%s: ", error_local->message);
+			return NULL;
+		}
+	}
+	/* only add in internal vfat partitions */
 	for (guint i = 0; i < volumes->len; i++) {
 		FuVolume *vol = g_ptr_array_index (volumes, i);
+		g_autofree gchar *type = fu_volume_get_id_type (vol);
+		if (type == NULL)
+			continue;
+		if (!fu_volume_is_internal (vol))
+			continue;
+		if (g_strcmp0 (type, "vfat") == 0)
+			g_ptr_array_add (volumes_vfat, vol);
+	}
+	if (volumes_vfat->len == 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_INVALID_FILENAME,
+			     "No ESP found");
+		return NULL;
+	}
+	for (guint i = 0; i < volumes_vfat->len; i++) {
+		FuVolume *vol = g_ptr_array_index (volumes_vfat, i);
 		g_ptr_array_add (fu_volume_is_mounted (vol) ? volumes_mtab : volumes_fstab, vol);
 	}
 	if (volumes_mtab->len == 1) {

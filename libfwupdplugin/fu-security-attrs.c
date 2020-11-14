@@ -17,7 +17,7 @@ struct _FuSecurityAttrs {
 	GPtrArray		*attrs;
 };
 
-/* probaly sane to *not* make this part of the ABI */
+/* probably sane to *not* make this part of the ABI */
 #define FWUPD_SECURITY_ATTR_ID_DOC_URL		"https://fwupd.github.io/hsi.html"
 
 G_DEFINE_TYPE (FuSecurityAttrs, fu_security_attrs, G_TYPE_OBJECT)
@@ -145,7 +145,7 @@ fu_security_attrs_remove_all (FuSecurityAttrs *self)
  * @self: A #FuSecurityAttrs
  * @flags: Flags to use while calcuating the HSI
  *
- * Calculates the HSI string from the appended attribues.
+ * Calculates the HSI string from the appended attributes.
  *
  * Returns: (transfer full): a string or %NULL
  *
@@ -159,8 +159,6 @@ fu_security_attrs_calculate_hsi (FuSecurityAttrs	*self,
 	FwupdSecurityAttrFlags attr_flags = FWUPD_SECURITY_ATTR_FLAG_NONE;
 	GString *str = g_string_new ("HSI:");
 	const FwupdSecurityAttrFlags hpi_suffixes[] = {
-		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_UPDATES,
-		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ATTESTATION,
 		FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE,
 		FWUPD_SECURITY_ATTR_FLAG_NONE,
 	};
@@ -198,25 +196,14 @@ fu_security_attrs_calculate_hsi (FuSecurityAttrs	*self,
 		FwupdSecurityAttr *attr = g_ptr_array_index (self->attrs, i);
 		if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_OBSOLETED))
 			continue;
-		/* positive things */
-		if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_UPDATES) ||
-		    fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ATTESTATION)) {
-			if (!fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
-				continue;
-		}
-		/* negative things */
-		if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE)) {
-			if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
-				continue;
-		}
+		if (fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE) &&
+		    fwupd_security_attr_has_flag (attr, FWUPD_SECURITY_ATTR_FLAG_SUCCESS))
+			continue;
 		attr_flags |= fwupd_security_attr_get_flags (attr);
 	}
 
 	g_string_append_printf (str, "%u", hsi_number);
-	if (attr_flags & (FWUPD_SECURITY_ATTR_FLAG_RUNTIME_UPDATES |
-			  FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ATTESTATION |
-			  FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE)) {
-		g_string_append (str, "+");
+	if (attr_flags & FWUPD_SECURITY_ATTR_FLAG_RUNTIME_ISSUE) {
 		for (guint j = 0; hpi_suffixes[j] != FWUPD_SECURITY_ATTR_FLAG_NONE; j++) {
 			if (attr_flags & hpi_suffixes[j])
 				g_string_append (str, fwupd_security_attr_flag_to_suffix (hpi_suffixes[j]));

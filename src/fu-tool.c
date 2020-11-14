@@ -141,16 +141,27 @@ fu_util_show_plugin_warnings (FuUtilPrivate *priv)
 
 	/* print */
 	for (guint i = 0; i < 64; i++) {
+		FwupdPluginFlags flag = (guint64) 1 << i;
 		const gchar *tmp;
 		g_autofree gchar *fmt = NULL;
-		if ((flags & ((guint64) 1 << i)) == 0)
+		g_autofree gchar *url= NULL;
+		g_autoptr(GString) str = g_string_new (NULL);
+		if ((flags & flag) == 0)
 			continue;
 		tmp = fu_util_plugin_flag_to_string ((guint64) 1 << i);
 		if (tmp == NULL)
 			continue;
 		/* TRANSLATORS: this is a prefix on the console */
 		fmt = fu_util_term_format (_("WARNING:"), FU_UTIL_TERM_COLOR_RED);
-		g_printerr ("%s %s\n", fmt, tmp);
+		g_string_append_printf (str, "%s %s\n", fmt, tmp);
+
+		url = g_strdup_printf ("https://github.com/fwupd/fwupd/wiki/PluginFlag:%s",
+				       fwupd_plugin_flag_to_string (flag));
+		g_string_append (str, "  ");
+		/* TRANSLATORS: %s is a link to a website */
+		g_string_append_printf (str, _("See %s for more information."), url);
+		g_string_append (str, "\n");
+		g_printerr ("%s", str->str);
 	}
 }
 
@@ -175,6 +186,7 @@ fu_util_start_engine (FuUtilPrivate *priv, FuEngineLoadFlags flags, GError **err
 			    fmt);
 	}
 	fu_util_show_plugin_warnings (priv);
+	fu_util_show_unsupported_warn ();
 	return TRUE;
 }
 
@@ -2361,13 +2373,32 @@ fu_util_prompt_for_volume (GError **error)
 	FuVolume *volume;
 	guint idx;
 	g_autoptr(GPtrArray) volumes = NULL;
+	g_autoptr(GPtrArray) volumes_vfat = g_ptr_array_new ();
+	g_autoptr(GError) error_local = NULL;
 
 	/* exactly one */
-	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
-	if (volumes == NULL)
-		return NULL;
-	if (volumes->len == 1) {
-		volume = g_ptr_array_index (volumes, 0);
+	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, &error_local);
+	if (volumes == NULL) {
+		g_debug ("%s, falling back to %s", error_local->message, FU_VOLUME_KIND_BDP);
+		volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_BDP, error);
+		if (volumes == NULL) {
+			g_prefix_error (error, "%s: ", error_local->message);
+			return NULL;
+		}
+	}
+	/* only add internal vfat partitions */
+	for (guint i = 0; i < volumes->len; i++) {
+		FuVolume *vol = g_ptr_array_index (volumes, i);
+		g_autofree gchar *type = fu_volume_get_id_type (vol);
+		if (type == NULL)
+			continue;
+		if (!fu_volume_is_internal (vol))
+			continue;
+		if (g_strcmp0 (type, "vfat") == 0)
+			g_ptr_array_add (volumes_vfat, vol);
+	}
+	if (volumes_vfat->len == 1) {
+		volume = g_ptr_array_index (volumes_vfat, 0);
 		/* TRANSLATORS: Volume has been chosen by the user */
 		g_print ("%s: %s\n", _("Selected volume"), fu_volume_get_id (volume));
 		return g_object_ref (volume);
@@ -2377,11 +2408,11 @@ fu_util_prompt_for_volume (GError **error)
 	g_print ("%s\n", _("Choose a volume:"));
 	/* TRANSLATORS: this is to abort the interactive prompt */
 	g_print ("0.\t%s\n", _("Cancel"));
-	for (guint i = 0; i < volumes->len; i++) {
-		volume = g_ptr_array_index (volumes, i);
+	for (guint i = 0; i < volumes_vfat->len; i++) {
+		volume = g_ptr_array_index (volumes_vfat, i);
 		g_print ("%u.\t%s\n", i + 1, fu_volume_get_id (volume));
 	}
-	idx = fu_util_prompt_for_number (volumes->len);
+	idx = fu_util_prompt_for_number (volumes_vfat->len);
 	if (idx == 0) {
 		g_set_error_literal (error,
 				     FWUPD_ERROR,
@@ -2389,7 +2420,7 @@ fu_util_prompt_for_volume (GError **error)
 				     "Request canceled");
 		return NULL;
 	}
-	volume = g_ptr_array_index (volumes, idx - 1);
+	volume = g_ptr_array_index (volumes_vfat, idx - 1);
 	return g_object_ref (volume);
 
 }

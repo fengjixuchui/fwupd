@@ -65,6 +65,7 @@ BuildRequires: libjcat-devel >= %{libjcat_version}
 BuildRequires: polkit-devel >= 0.103
 BuildRequires: sqlite-devel
 BuildRequires: systemd >= %{systemd_version}
+BuildRequires: systemd-devel
 BuildRequires: libarchive-devel
 BuildRequires: gobject-introspection-devel
 BuildRequires: gcab
@@ -245,7 +246,8 @@ can be flashed using flashrom. It is probably not required on servers.
 %else
     -Dplugin_modem_manager=false \
 %endif
-    -Dman=true
+    -Dman=true \
+    -Dsupported_build=true
 
 %meson_build
 
@@ -350,16 +352,16 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_datadir}/polkit-1/actions/org.freedesktop.fwupd.policy
 %{_datadir}/polkit-1/rules.d/org.freedesktop.fwupd.rules
 %{_datadir}/dbus-1/system-services/org.freedesktop.fwupd.service
-%{_datadir}/man/man1/fwupdtool.1.gz
-%{_datadir}/man/man1/fwupdagent.1.gz
-%{_datadir}/man/man1/dfu-tool.1.gz
+%{_mandir}/man1/fwupdtool.1*
+%{_mandir}/man1/fwupdagent.1*
+%{_mandir}/man1/dfu-tool.1*
 %if 0%{?have_uefi}
-%{_datadir}/man/man1/dbxtool.1.gz
+%{_mandir}/man1/dbxtool.*
 %endif
-%{_datadir}/man/man1/fwupdmgr.1.gz
+%{_mandir}/man1/fwupdmgr.1*
 %if 0%{?have_uefi}
-%{_datadir}/man/man1/fwupdate.1.gz
-%{_datadir}/man/man1/fwupdtpmevlog.1.gz
+%{_mandir}/man1/fwupdate.1*
+%{_mandir}/man1/fwupdtpmevlog.1*
 %endif
 %{_datadir}/metainfo/org.freedesktop.fwupd.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/org.freedesktop.fwupd.svg
@@ -389,7 +391,6 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/fwupd-plugins-3/libfu_plugin_amt.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ata.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_bcm57xx.so
-%{_libdir}/fwupd-plugins-3/libfu_plugin_bios.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ccgx.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_colorhug.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_coreboot.so
@@ -408,6 +409,7 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ep963x.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_fastboot.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_fresco_pd.so
+%{_libdir}/fwupd-plugins-3/libfu_plugin_hailuck.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_iommu.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_jabra.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_linux_lockdown.so
@@ -448,6 +450,7 @@ mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 %if 0%{?have_uefi}
 %{_libdir}/fwupd-plugins-3/libfu_plugin_tpm.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_tpm_eventlog.so
+%{_libdir}/fwupd-plugins-3/libfu_plugin_bios.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_uefi.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_uefi_dbx.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_uefi_recovery.so

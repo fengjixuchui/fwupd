@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.5.0',
+  version : '1.5.2',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -131,7 +131,7 @@ foreach arg: test_link_args
     global_link_args += arg
   endif
 endforeach
-add_global_link_arguments(
+add_project_link_arguments(
   global_link_args,
   language: 'c'
 )
@@ -228,7 +228,7 @@ if build_daemon
 endif
 libm = cc.find_library('m', required: false)
 libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gcab_dep'])
-gcab = find_program('gcab', required : true)
+gcab = find_program('gcab', required : get_option('tests'))
 bashcomp = dependency('bash-completion', required: false)
 python3 = find_program('python3')
 
@@ -376,6 +376,7 @@ endif
 
 if build_standalone and get_option('systemd')
   systemd = dependency('systemd', version : '>= 211')
+  libsystemd = dependency('libsystemd')
   conf.set('HAVE_SYSTEMD' , '1')
   conf.set('HAVE_LOGIND' , '1')
   systemd_root_prefix = get_option('systemd_root_prefix')
@@ -388,6 +389,8 @@ if build_standalone and get_option('systemd')
     systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir', define_variable: ['rootprefix', systemd_root_prefix])
     systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: [systemd.version().version_compare('>= 246') ? 'root_prefix' : 'rootprefix', systemd_root_prefix])
   endif
+else
+  libsystemd = dependency('', required: false)
 endif
 
 if build_standalone and get_option('elogind')
@@ -397,6 +400,10 @@ endif
 
 if build_standalone and get_option('consolekit')
   conf.set('HAVE_CONSOLEKIT' , '1')
+endif
+
+if get_option('supported_build')
+    conf.set('SUPPORTED_BUILD', '1')
 endif
 
 gnome = import('gnome')
@@ -476,4 +483,18 @@ if makensis.found()
       makensis,
       join_paths(meson.source_root(), 'contrib', 'setup-win32.nsi'),
   ])
+endif
+
+codespell = find_program('codespell', required : false)
+if codespell.found()
+run_target('codespell',
+  command: [
+    codespell,
+    meson.source_root(),
+    '--write-changes',
+    '--builtin', 'en-GB_to_en-US',
+    '--skip', '*.po,*.csv,*.svg,*.p7c,subprojects,.git,pcrs,build*',
+    '--ignore-words-list', 'conexant,Conexant,gir,GIR,hsi,HSI,cancelled,Cancelled',
+  ]
+)
 endif

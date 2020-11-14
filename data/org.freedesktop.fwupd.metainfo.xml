@@ -35,6 +35,26 @@
     <binary>fwupdagent</binary>
   </provides>
   <releases>
+    <release version="1.5.1" date="2020-11-02">
+      <description>
+        <p>This release adds the following features:</p>
+        <ul>
+          <li>Include the amount of NVRAM size in use in the LVFS failure report</li>
+        </ul>
+        <p>This release fixes the following bugs:</p>
+        <ul>
+          <li>Delete unused EFI variables when deploying firmware</li>
+          <li>Fix probe warning for the Logitech Unifying device</li>
+          <li>Make bcm57xx hotplug more reliable</li>
+          <li>Recognize authorized thunderbolt value of 2</li>
+          <li>Remove the duplicate parent-child data in FwupdDevice and FuDevice</li>
+          <li>Show a less scary fwupdate output for devices without info</li>
+          <li>Show a link to discover more information about a specific plugin failure</li>
+          <li>Use a different Device ID for the OptionROM devices</li>
+          <li>Use UDisks to find out if swap devices are encrypted</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.0" date="2020-10-26">
       <description>
         <p>This release adds the following features:</p>
@@ -49,11 +69,12 @@
           <li>Add plugin to update Elan Touchpads using HID</li>
           <li>Add support for a delayed activation flow for Thunderbolt</li>
           <li>Add support for ChromeOS Quiche and Gingerbread</li>
+          <li>Add support for Hyper hardware</li>
           <li>Add support for the Host Security ID</li>
           <li>Add support for ThunderBolt retimers</li>
           <li>Add switch-branch command to fwupdtool and fwupdmgr</li>
           <li>Allow blocking specific firmware releases by checksum</li>
-          <li>Allow contructing a firmware with multiple images</li>
+          <li>Allow constructing a firmware with multiple images</li>
           <li>Allow firmware to require specific features from front-end clients</li>
           <li>Allow updating the dbx using the LVFS, validating it is safe to apply</li>
           <li>Include the HSI results and attributes in the uploaded report</li>
@@ -80,6 +101,7 @@
           <li>Parse the HEX version before comparing for equality</li>
           <li>Prevent dell-dock updates to occur via synaptics-mst plugin</li>
           <li>Record the UEFI failure in more cases</li>
+          <li>Retry the HID SetReport to fix flashing the TB3 dock</li>
           <li>Show an error when a plugin is missing dependencies</li>
           <li>Use libxmlb bound parameters to speed up the device verification</li>
           <li>Use pkttyagent to request user passwords if running without GUI</li>
