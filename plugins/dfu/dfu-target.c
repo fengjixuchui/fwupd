@@ -519,18 +519,26 @@ dfu_target_check_status (DfuTarget *target, GError **error)
 {
 	DfuTargetPrivate *priv = GET_PRIVATE (target);
 	DfuStatus status;
+	g_autoptr(GTimer) timer = g_timer_new ();
 
 	/* get the status */
 	if (!dfu_device_refresh (priv->device, error))
 		return FALSE;
 
 	/* wait for dfuDNBUSY to not be set */
-	if (dfu_device_get_version (priv->device) == DFU_VERSION_DFUSE) {
-		while (dfu_device_get_state (priv->device) == DFU_STATE_DFU_DNBUSY) {
-			g_debug ("waiting for DFU_STATE_DFU_DNBUSY to clear");
-			g_usleep (dfu_device_get_download_timeout (priv->device) * 1000);
-			if (!dfu_device_refresh (priv->device, error))
-				return FALSE;
+	while (dfu_device_get_state (priv->device) == DFU_STATE_DFU_DNBUSY) {
+		g_debug ("waiting for DFU_STATE_DFU_DNBUSY to clear");
+		g_usleep (dfu_device_get_download_timeout (priv->device) * 1000);
+		if (!dfu_device_refresh (priv->device, error))
+			return FALSE;
+		/* this is a really long time to save fwupd in case
+		 * the device has got wedged */
+		if (g_timer_elapsed (timer, NULL) > 120.f) {
+			g_set_error_literal (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_INTERNAL,
+					     "Stuck in DFU_DNBUSY");
+			return FALSE;
 		}
 	}
 
@@ -724,12 +732,8 @@ dfu_target_download_chunk (DfuTarget *target, guint16 index, GBytes *bytes, GErr
 	gsize actual_length;
 
 	/* low level packet debugging */
-	if (g_getenv ("FWUPD_DFU_VERBOSE") != NULL) {
-		gsize sz = 0;
-		const guint8 *data = g_bytes_get_data (bytes, &sz);
-		for (gsize i = 0; i < sz; i++)
-			g_print ("Message: m[%" G_GSIZE_FORMAT "] = 0x%02x\n", i, (guint) data[i]);
-	}
+	if (g_getenv ("FWUPD_DFU_VERBOSE") != NULL)
+		fu_common_dump_bytes (G_LOG_DOMAIN, "Message", bytes);
 
 	if (!g_usb_device_control_transfer (usb_device,
 					    G_USB_DEVICE_DIRECTION_HOST_TO_DEVICE,
@@ -772,8 +776,8 @@ dfu_target_download_chunk (DfuTarget *target, guint16 index, GBytes *bytes, GErr
 		g_usleep (dfu_device_get_download_timeout (priv->device) * 1000);
 	}
 
-	/* find out if the write was successful */
-	if (!dfu_device_refresh (priv->device, error))
+	/* find out if the write was successful, waiting for BUSY to clear */
+	if (!dfu_target_check_status (target, error))
 		return FALSE;
 
 	g_assert (actual_length == g_bytes_get_size (bytes));
@@ -817,10 +821,8 @@ dfu_target_upload_chunk (DfuTarget *target, guint16 index, gsize buf_sz, GError 
 	}
 
 	/* low level packet debugging */
-	if (g_getenv ("FWUPD_DFU_VERBOSE") != NULL) {
-		for (gsize i = 0; i < actual_length; i++)
-			g_print ("Message: r[%" G_GSIZE_FORMAT "] = 0x%02x\n", i, (guint) buf[i]);
-	}
+	if (g_getenv ("FWUPD_DFU_VERBOSE") != NULL)
+		fu_common_dump_raw (G_LOG_DOMAIN, "Message", buf, actual_length);
 
 	return g_bytes_new_take (buf, actual_length);
 }
@@ -1176,7 +1178,12 @@ dfu_target_download_element_dfu (DfuTarget *target,
 			length = g_bytes_get_size (bytes) - offset;
 			if (length > transfer_size)
 				length = transfer_size;
-			bytes_tmp = g_bytes_new_from_bytes (bytes, offset, length);
+			bytes_tmp = fu_common_bytes_new_offset (bytes,
+								offset,
+								length,
+								error);
+			if (bytes_tmp == NULL)
+				return FALSE;
 		} else {
 			bytes_tmp = g_bytes_new (NULL, 0);
 		}

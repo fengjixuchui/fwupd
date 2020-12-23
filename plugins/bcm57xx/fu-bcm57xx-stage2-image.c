@@ -28,7 +28,11 @@ fu_bcm57xx_stage2_image_parse (FuFirmwareImage *image,
 		if (!fu_bcm57xx_verify_crc (fw, error))
 			return FALSE;
 	}
-	fw_nocrc = g_bytes_new_from_bytes (fw, 0x0, g_bytes_get_size (fw) - sizeof(guint32));
+	fw_nocrc = fu_common_bytes_new_offset (fw, 0x0,
+					       g_bytes_get_size (fw) - sizeof(guint32),
+					       error);
+	if (fw_nocrc == NULL)
+		return FALSE;
 	fu_firmware_image_set_bytes (image, fw_nocrc);
 	return TRUE;
 }
@@ -61,7 +65,7 @@ fu_bcm57xx_stage2_image_write (FuFirmwareImage *image, GError **error)
 	g_byte_array_append (blob, buf, bufsz);
 
 	/* add CRC */
-	fu_byte_array_append_uint32 (blob, fu_bcm57xx_nvram_crc (buf, bufsz), G_BIG_ENDIAN);
+	fu_byte_array_append_uint32 (blob, fu_bcm57xx_nvram_crc (buf, bufsz), G_LITTLE_ENDIAN);
 	return g_byte_array_free_to_bytes (g_steal_pointer (&blob));
 }
 

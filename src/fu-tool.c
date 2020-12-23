@@ -18,7 +18,6 @@
 #include <locale.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <libsoup/soup.h>
 #include <jcat.h>
 
 #include "fu-device-private.h"
@@ -168,9 +167,8 @@ fu_util_show_plugin_warnings (FuUtilPrivate *priv)
 static gboolean
 fu_util_start_engine (FuUtilPrivate *priv, FuEngineLoadFlags flags, GError **error)
 {
-	g_autoptr(GError) error_local = NULL;
-
 #ifdef HAVE_SYSTEMD
+	g_autoptr(GError) error_local = NULL;
 	if (!fu_systemd_unit_stop (fu_util_get_systemd_unit (), &error_local))
 		g_debug ("Failed to stop daemon: %s", error_local->message);
 #endif
@@ -305,7 +303,7 @@ fu_main_engine_percentage_changed_cb (FuEngine *engine,
 static gboolean
 fu_util_watch (FuUtilPrivate *priv, gchar **values, GError **error)
 {
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_COLDPLUG, error))
 		return FALSE;
 	g_main_loop_run (priv->loop);
 	return TRUE;
@@ -463,7 +461,11 @@ fu_util_get_updates (FuUtilPrivate *priv, gchar **values, GError **error)
 	gboolean latest_header = FALSE;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 	title = fu_util_get_tree_title (priv);
 
@@ -559,7 +561,11 @@ fu_util_get_details (FuUtilPrivate *priv, gchar **values, GError **error)
 	gint fd;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 	title = fu_util_get_tree_title (priv);
 
@@ -653,7 +659,11 @@ fu_util_get_devices (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(GPtrArray) devs = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 	title = fu_util_get_tree_title (priv);
 
@@ -763,7 +773,11 @@ fu_util_install_blob (FuUtilPrivate *priv, gchar **values, GError **error)
 	}
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -912,13 +926,11 @@ static gchar *
 fu_util_download_if_required (FuUtilPrivate *priv, const gchar *perhapsfn, GError **error)
 {
 	g_autofree gchar *filename = NULL;
-	g_autoptr(SoupURI) uri = NULL;
 
 	/* a local file */
-	uri = soup_uri_new (perhapsfn);
 	if (g_file_test (perhapsfn, G_FILE_TEST_EXISTS))
 		return g_strdup (perhapsfn);
-	if (uri == NULL)
+	if (!fu_util_is_url (perhapsfn))
 		return g_strdup (perhapsfn);
 
 	/* download the firmware to a cachedir */
@@ -942,7 +954,11 @@ fu_util_install (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(XbSilo) silo = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* handle both forms */
@@ -1079,7 +1095,6 @@ fu_util_install_release (FuUtilPrivate *priv, FwupdRelease *rel, GError **error)
 	const gchar *remote_id;
 	const gchar *uri_tmp;
 	g_auto(GStrv) argv = NULL;
-	g_autoptr(SoupURI) uri = NULL;
 
 	uri_tmp = fwupd_release_get_uri (rel);
 	if (uri_tmp == NULL) {
@@ -1107,8 +1122,8 @@ fu_util_install_release (FuUtilPrivate *priv, FwupdRelease *rel, GError **error)
 
 	argv = g_new0 (gchar *, 2);
 	/* local remotes may have the firmware already */
-	uri = soup_uri_new (uri_tmp);
-	if (fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_LOCAL && uri == NULL) {
+	if (fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_LOCAL &&
+	    !fu_util_is_url (uri_tmp)) {
 		const gchar *fn_cache = fwupd_remote_get_filename_cache (remote);
 		g_autofree gchar *path = g_path_get_dirname (fn_cache);
 		argv[0] = g_build_filename (path, uri_tmp, NULL);
@@ -1245,7 +1260,11 @@ fu_util_update (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 	}
 
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	priv->current_operation = FU_UTIL_OPERATION_UPDATE;
@@ -1288,7 +1307,11 @@ fu_util_reinstall (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 	}
 
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	dev = fu_util_get_device (priv, values[0], error);
@@ -1351,7 +1374,11 @@ fu_util_detach (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDeviceLocker) locker = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -1379,7 +1406,11 @@ fu_util_unbind_driver (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDeviceLocker) locker = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -1405,7 +1436,11 @@ fu_util_bind_driver (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDeviceLocker) locker = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -1439,7 +1474,11 @@ fu_util_attach (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDeviceLocker) locker = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -1501,7 +1540,7 @@ fu_util_activate (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_READONLY_FS, error))
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	/* parse arguments */
@@ -1752,7 +1791,7 @@ fu_util_get_firmware_types (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(GPtrArray) firmware_types = NULL;
 
 	/* load engine */
-	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	firmware_types = fu_engine_get_firmware_gtype_ids (priv->engine);
@@ -1823,7 +1862,7 @@ fu_util_firmware_parse (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* load engine */
-	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	/* find the GType to use */
@@ -1874,7 +1913,7 @@ fu_util_firmware_extract (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* load engine */
-	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	/* find the GType to use */
@@ -1956,7 +1995,7 @@ fu_util_firmware_build (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* load engine */
-	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	/* parse XML */
@@ -2054,7 +2093,7 @@ fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 
 	/* load engine */
-	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_NO_ENUMERATE, error))
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
 	/* find the GType to use */
@@ -2116,7 +2155,11 @@ fu_util_verify_update (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDevice) dev = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* get device */
@@ -2148,7 +2191,11 @@ fu_util_get_history (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autofree gchar *title = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 	title = fu_util_get_tree_title (priv);
 
@@ -2277,7 +2324,11 @@ fu_util_refresh (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(GPtrArray) remotes = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* download new metadata */
@@ -2304,7 +2355,7 @@ fu_util_get_remotes (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autofree gchar *title = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_REMOTES, error))
 		return FALSE;
 	title = fu_util_get_tree_title (priv);
 
@@ -2346,7 +2397,11 @@ fu_util_security (FuUtilPrivate *priv, gchar **values, GError **error)
 		return FALSE;
 	}
 
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* TRANSLATORS: this is a string like 'HSI:2-U' */
@@ -2481,7 +2536,11 @@ fu_util_switch_branch (FuUtilPrivate *priv, gchar **values, GError **error)
 	g_autoptr(FuDevice) dev = NULL;
 
 	/* load engine */
-	if (!fu_util_start_engine (priv, FU_ENGINE_LOAD_FLAG_NONE, error))
+	if (!fu_util_start_engine (priv,
+				   FU_ENGINE_LOAD_FLAG_COLDPLUG |
+				   FU_ENGINE_LOAD_FLAG_HWINFO |
+				   FU_ENGINE_LOAD_FLAG_REMOTES,
+				   error))
 		return FALSE;
 
 	/* find the device and check it has multiple branches */
@@ -2512,9 +2571,11 @@ fu_util_switch_branch (FuUtilPrivate *priv, gchar **values, GError **error)
 	for (guint i = 0; i < rels->len; i++) {
 		FwupdRelease *rel_tmp = g_ptr_array_index (rels, i);
 		const gchar *branch_tmp = fu_util_release_get_branch (rel_tmp);
+#if GLIB_CHECK_VERSION(2,54,3)
 		if (g_ptr_array_find_with_equal_func (branches, branch_tmp,
 						      g_str_equal, NULL))
 			continue;
+#endif
 		g_ptr_array_add (branches, g_strdup (branch_tmp));
 	}
 
@@ -2704,13 +2765,15 @@ main (int argc, char *argv[])
 	/* add commands */
 	fu_util_cmd_array_add (cmd_array,
 		     "build-firmware",
-		     "FILE-IN FILE-OUT [SCRIPT] [OUTPUT]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILE-IN FILE-OUT [SCRIPT] [OUTPUT]"),
 		     /* TRANSLATORS: command description */
 		     _("Build firmware using a sandbox"),
 		     fu_util_firmware_builder);
 	fu_util_cmd_array_add (cmd_array,
 		     "smbios-dump",
-		     "FILE",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILE"),
 		     /* TRANSLATORS: command description */
 		     _("Dump SMBIOS data from a file"),
 		     fu_util_smbios_dump);
@@ -2734,7 +2797,8 @@ main (int argc, char *argv[])
 		     fu_util_get_history);
 	fu_util_cmd_array_add (cmd_array,
 		     "get-updates,get-upgrades",
-		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Gets the list of updates for connected hardware"),
 		     fu_util_get_updates);
@@ -2758,55 +2822,64 @@ main (int argc, char *argv[])
 		     fu_util_watch);
 	fu_util_cmd_array_add (cmd_array,
 		     "install-blob",
-		     "FILENAME DEVICE-ID",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME DEVICE-ID"),
 		     /* TRANSLATORS: command description */
 		     _("Install a firmware blob on a device"),
 		     fu_util_install_blob);
 	fu_util_cmd_array_add (cmd_array,
 		     "install",
-		     "FILE [DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILE [DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Install a firmware file on this hardware"),
 		     fu_util_install);
 	fu_util_cmd_array_add (cmd_array,
 		     "reinstall",
-		     "DEVICE-ID|GUID",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("DEVICE-ID|GUID"),
 		     /* TRANSLATORS: command description */
 		     _("Reinstall firmware on a device"),
 		     fu_util_reinstall);
 	fu_util_cmd_array_add (cmd_array,
 		     "attach",
-		     "DEVICE-ID|GUID",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("DEVICE-ID|GUID"),
 		     /* TRANSLATORS: command description */
 		     _("Attach to firmware mode"),
 		     fu_util_attach);
 	fu_util_cmd_array_add (cmd_array,
 		     "detach",
-		     "DEVICE-ID|GUID",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("DEVICE-ID|GUID"),
 		     /* TRANSLATORS: command description */
 		     _("Detach to bootloader mode"),
 		     fu_util_detach);
 	fu_util_cmd_array_add (cmd_array,
 		     "unbind-driver",
-		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Unbind current driver"),
 		     fu_util_unbind_driver);
 	fu_util_cmd_array_add (cmd_array,
 		     "bind-driver",
-		     "subsystem driver [DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("SUBSYSTEM DRIVER [DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Bind new kernel driver"),
 		     fu_util_bind_driver);
 	fu_util_cmd_array_add (cmd_array,
 		     "activate",
-		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Activate pending devices"),
 		     fu_util_activate);
 	fu_util_cmd_array_add (cmd_array,
 		     "hwids",
-		     "[FILE]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[FILE]"),
 		     /* TRANSLATORS: command description */
 		     _("Return all the hardware IDs for the machine"),
 		     fu_util_hwids);
@@ -2818,50 +2891,58 @@ main (int argc, char *argv[])
 		     fu_util_monitor);
 	fu_util_cmd_array_add (cmd_array,
 		     "update,upgrade",
-		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Update all devices that match local metadata"),
 		     fu_util_update);
 	fu_util_cmd_array_add (cmd_array,
 		     "self-sign",
-		     "TEXT",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("TEXT"),
 		     /* TRANSLATORS: command description */
 		     C_("command-description",
 			"Sign data using the client certificate"),
 		     fu_util_self_sign);
 	fu_util_cmd_array_add (cmd_array,
 		     "verify-update",
-		     "[DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Update the stored metadata with current contents"),
 		     fu_util_verify_update);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-dump",
-		     "FILENAME [DEVICE-ID|GUID]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME [DEVICE-ID|GUID]"),
 		     /* TRANSLATORS: command description */
 		     _("Read a firmware blob from a device"),
 		     fu_util_firmware_dump);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-convert",
-		     "FILENAME-SRC FILENAME-DST [FIRMWARE-TYPE-SRC] [FIRMWARE-TYPE-DST]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME-SRC FILENAME-DST [FIRMWARE-TYPE-SRC] [FIRMWARE-TYPE-DST]"),
 		     /* TRANSLATORS: command description */
 		     _("Convert a firmware file"),
 		     fu_util_firmware_convert);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-build",
-		     "BUILDER-XML FILENAME-DST",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("BUILDER-XML FILENAME-DST"),
 		     /* TRANSLATORS: command description */
 		     _("Build a firmware file"),
 		     fu_util_firmware_build);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-parse",
-		     "FILENAME [FIRMWARE-TYPE]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME [FIRMWARE-TYPE]"),
 		     /* TRANSLATORS: command description */
 		     _("Parse and show details about a firmware file"),
 		     fu_util_firmware_parse);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-extract",
-		     "FILENAME [FIRMWARE-TYPE]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME [FIRMWARE-TYPE]"),
 		     /* TRANSLATORS: command description */
 		     _("Extract a firmware blob to images"),
 		     fu_util_firmware_extract);
@@ -2909,7 +2990,8 @@ main (int argc, char *argv[])
 		     fu_util_esp_list);
 	fu_util_cmd_array_add (cmd_array,
 		     "switch-branch",
-		     "[DEVICE-ID|GUID] [BRANCH]",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("[DEVICE-ID|GUID] [BRANCH]"),
 		     /* TRANSLATORS: command description */
 		     _("Switch the firmware branch on the device"),
 		     fu_util_switch_branch);
@@ -2945,8 +3027,9 @@ main (int argc, char *argv[])
 	cmd_descriptions = fu_util_cmd_array_to_string (cmd_array);
 	g_option_context_set_summary (priv->context, cmd_descriptions);
 	g_option_context_set_description (priv->context,
-		"This tool allows an administrator to use the fwupd plugins "
-		"without being installed on the host system.");
+		/* TRANSLATORS: CLI description */
+		_("This tool allows an administrator to use the fwupd plugins "
+		  "without being installed on the host system."));
 
 	/* TRANSLATORS: program name */
 	g_set_application_name (_("Firmware Utility"));

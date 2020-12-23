@@ -173,9 +173,11 @@ fu_device_add_possible_plugin (FuDevice *self, const gchar *plugin)
 	g_return_if_fail (plugin != NULL);
 
 	/* add if it does not already exist */
+#if GLIB_CHECK_VERSION(2,54,3)
 	if (g_ptr_array_find_with_equal_func (priv->possible_plugins, plugin,
 					      g_str_equal, NULL))
 		return;
+#endif
 	g_ptr_array_add (priv->possible_plugins, g_strdup (plugin));
 }
 
@@ -1049,6 +1051,7 @@ fu_device_set_quirk_kv (FuDevice *self,
 				     G_IO_ERROR,
 				     G_IO_ERROR_NOT_FOUND,
 				     "device GType %s not supported", value);
+			return FALSE;
 		}
 		return TRUE;
 	}
@@ -2314,6 +2317,10 @@ fu_device_add_string (FuDevice *self, guint idt, GString *str)
 			const gchar *value = g_hash_table_lookup (priv->metadata, key);
 			fu_common_string_append_kv (str, idt + 1, key, value);
 		}
+	}
+	for (guint i = 0; i < priv->possible_plugins->len; i++) {
+		const gchar *name = g_ptr_array_index (priv->possible_plugins, i);
+		fu_common_string_append_kv (str, idt + 1, "PossiblePlugin", name);
 	}
 
 	/* subclassed */

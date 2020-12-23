@@ -475,7 +475,7 @@ fu_engine_get_remote_id_for_checksum (FuEngine *self, const gchar *csum)
 {
 	g_autofree gchar *xpath = NULL;
 	g_autoptr(XbNode) key = NULL;
-	xpath = g_strdup_printf ("components/component/releases/release/"
+	xpath = g_strdup_printf ("components/component[@type='firmware']/releases/release/"
 				 "checksum[@target='container'][text()='%s']/../../"
 				 "../../custom/value[@key='fwupd::RemoteId']", csum);
 	key = xb_silo_query_first (self->silo, xpath, NULL);
@@ -788,7 +788,7 @@ fu_engine_get_component_by_guids (FuEngine *self, FuDevice *device)
 	for (guint i = 0; i < guids->len; i++) {
 		const gchar *guid = g_ptr_array_index (guids, i);
 		xb_string_append_union (xpath,
-					"components/component/"
+					"components/component[@type='firmware']/"
 					"provides/firmware[@type='flashed'][text()='%s']/"
 					"../..", guid);
 	}
@@ -859,7 +859,7 @@ fu_engine_verify_from_system_metadata (FuEngine *self,
 
 	/* prepare query with bound GUID parameter */
 	query = xb_query_new_full (self->silo,
-				   "components/component/"
+				   "components/component[@type='firmware']/"
 				   "provides/firmware[@type='flashed'][text()=?]/"
 				   "../../releases/release",
 				   XB_QUERY_FLAG_OPTIMIZE |
@@ -873,13 +873,21 @@ fu_engine_verify_from_system_metadata (FuEngine *self,
 		const gchar *guid = g_ptr_array_index (guids, i);
 		g_autoptr(GError) error_local = NULL;
 		g_autoptr(GPtrArray) releases = NULL;
+#if LIBXMLB_CHECK_VERSION(0,3,0)
+		g_auto(XbQueryContext) context = XB_QUERY_CONTEXT_INIT ();
+#endif
 
 		/* bind GUID and then query */
+#if LIBXMLB_CHECK_VERSION(0,3,0)
+		xb_value_bindings_bind_str (xb_query_context_get_bindings (&context), 0, guid, NULL);
+		releases = xb_silo_query_with_context (self->silo, query, &context, &error_local);
+#else
 		if (!xb_query_bind_str (query, 0, guid, error)) {
 			g_prefix_error (error, "failed to bind string: ");
 			return NULL;
 		}
 		releases = xb_silo_query_full (self->silo, query, &error_local);
+#endif
 		if (releases == NULL) {
 			if (g_error_matches (error_local, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ||
 			    g_error_matches (error_local, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT)) {
@@ -1380,7 +1388,7 @@ fu_engine_check_requirement_client (FuEngine *self,
 	for (guint i = 0; feature_split[i] != NULL; i++) {
 		FwupdFeatureFlags flag = fwupd_feature_flag_from_string (feature_split[i]);
 
-		/* not recognised */
+		/* not recognized */
 		if (flag == FWUPD_FEATURE_FLAG_LAST) {
 			g_set_error (error,
 				     FWUPD_ERROR,
@@ -2185,7 +2193,8 @@ fu_engine_install_release (FuEngine *self,
 	fmt = fu_device_get_version_format (device);
 	if (version_rel != NULL &&
 	    fu_common_vercmp_full (version_orig, version_rel, fmt) != 0 &&
-	    fu_common_vercmp_full (version_orig, fu_device_get_version (device), fmt) == 0) {
+	    fu_common_vercmp_full (version_orig, fu_device_get_version (device), fmt) == 0 &&
+	    !fu_device_has_flag (device, FWUPD_DEVICE_FLAG_SKIPS_RESTART)) {
 		g_autofree gchar *str = NULL;
 		fu_device_set_update_state (device, FWUPD_UPDATE_STATE_FAILED);
 		str = g_strdup_printf ("device version not updated on success, %s != %s",
@@ -3314,7 +3323,7 @@ fu_engine_load_metadata_store (FuEngine *self, FuEngineLoadFlags flags, GError *
 	}
 
 	/* on a read-only filesystem don't care about the cache GUID */
-	if (flags & FU_ENGINE_LOAD_FLAG_READONLY_FS)
+	if (flags & FU_ENGINE_LOAD_FLAG_READONLY)
 		compile_flags |= XB_BUILDER_COMPILE_FLAG_IGNORE_GUID;
 
 	/* ensure silo is up to date */
@@ -3326,17 +3335,23 @@ fu_engine_load_metadata_store (FuEngine *self, FuEngineLoadFlags flags, GError *
 		return FALSE;
 
 	/* print what we've got */
-	components = xb_silo_query (self->silo, "components/component", 0, NULL);
+	components = xb_silo_query (self->silo,
+				    "components/component[@type='firmware']",
+				    0, NULL);
 	if (components != NULL)
 		g_debug ("%u components now in silo", components->len);
 
 	/* build the index */
 	if (!xb_silo_query_build_index (self->silo,
-					"components/component/provides/firmware",
+					"components/component",
 					"type", error))
 		return FALSE;
 	if (!xb_silo_query_build_index (self->silo,
-					"components/component/provides/firmware",
+					"components/component[@type='firmware']/provides/firmware",
+					"type", error))
+		return FALSE;
+	if (!xb_silo_query_build_index (self->silo,
+					"components/component[@type='firmware']/provides/firmware",
 					NULL, error))
 		return FALSE;
 
@@ -3500,6 +3515,8 @@ fu_engine_update_metadata_bytes (FuEngine *self, const gchar *remote_id,
 {
 	FwupdKeyringKind keyring_kind;
 	FwupdRemote *remote;
+	JcatVerifyFlags jcat_flags = JCAT_VERIFY_FLAG_REQUIRE_SIGNATURE;
+	g_autoptr(JcatFile) jcat_file = jcat_file_new ();
 
 	g_return_val_if_fail (FU_IS_ENGINE (self), FALSE);
 	g_return_val_if_fail (remote_id != NULL, FALSE);
@@ -3524,23 +3541,37 @@ fu_engine_update_metadata_bytes (FuEngine *self, const gchar *remote_id,
 		return FALSE;
 	}
 
-	/* verify file */
+	/* verify JCatFile, or create a dummy one from legacy data */
 	keyring_kind = fwupd_remote_get_keyring_kind (remote);
-	if (keyring_kind != FWUPD_KEYRING_KIND_NONE) {
-		g_autoptr(GError) error_local = NULL;
+	if (keyring_kind == FWUPD_KEYRING_KIND_JCAT) {
 		g_autoptr(GInputStream) istream = NULL;
-		g_autoptr(GPtrArray) results = NULL;
-		g_autoptr(JcatFile) jcat_file = jcat_file_new ();
-		g_autoptr(JcatItem) jcat_item = NULL;
-		g_autoptr(JcatResult) jcat_result = NULL;
-		g_autoptr(JcatResult) jcat_result_old = NULL;
-
-		/* load Jcat file */
 		istream = g_memory_input_stream_new_from_bytes (bytes_sig);
 		if (!jcat_file_import_stream (jcat_file, istream,
 					      JCAT_IMPORT_FLAG_NONE,
 					      NULL, error))
 			return FALSE;
+		jcat_flags |= JCAT_VERIFY_FLAG_REQUIRE_CHECKSUM;
+	} else if (keyring_kind == FWUPD_KEYRING_KIND_GPG) {
+		g_autoptr(JcatBlob) jcab_blob = NULL;
+		g_autoptr(JcatItem) jcat_item = jcat_item_new ("");
+		jcab_blob = jcat_blob_new (JCAT_BLOB_KIND_GPG, bytes_sig);
+		jcat_item_add_blob (jcat_item, jcab_blob);
+		jcat_file_add_item (jcat_file, jcat_item);
+	} else if (keyring_kind == FWUPD_KEYRING_KIND_PKCS7) {
+		g_autoptr(JcatBlob) jcab_blob = NULL;
+		g_autoptr(JcatItem) jcat_item = jcat_item_new ("");
+		jcab_blob = jcat_blob_new (JCAT_BLOB_KIND_PKCS7, bytes_sig);
+		jcat_item_add_blob (jcat_item, jcab_blob);
+		jcat_file_add_item (jcat_file, jcat_item);
+	}
+
+	/* verify file */
+	if (keyring_kind != FWUPD_KEYRING_KIND_NONE) {
+		g_autoptr(GError) error_local = NULL;
+		g_autoptr(GPtrArray) results = NULL;
+		g_autoptr(JcatItem) jcat_item = NULL;
+		g_autoptr(JcatResult) jcat_result = NULL;
+		g_autoptr(JcatResult) jcat_result_old = NULL;
 
 		/* this should only be signing one thing */
 		jcat_item = jcat_file_get_item_default (jcat_file, error);
@@ -3548,9 +3579,7 @@ fu_engine_update_metadata_bytes (FuEngine *self, const gchar *remote_id,
 			return FALSE;
 		results = jcat_context_verify_item (self->jcat_context,
 						    bytes_raw, jcat_item,
-						    JCAT_VERIFY_FLAG_REQUIRE_CHECKSUM |
-						    JCAT_VERIFY_FLAG_REQUIRE_SIGNATURE,
-						    error);
+						    jcat_flags, error);
 		if (results == NULL)
 			return FALSE;
 
@@ -3863,7 +3892,9 @@ fu_engine_get_details (FuEngine *self, FuEngineRequest *request, gint fd, GError
 	silo = fu_engine_get_silo_from_blob (self, blob, error);
 	if (silo == NULL)
 		return NULL;
-	components = xb_silo_query (silo, "components/component", 0, &error_local);
+	components = xb_silo_query (silo,
+				    "components/component[@type='firmware']",
+				    0, &error_local);
 	if (components == NULL) {
 		g_set_error (error,
 			     FWUPD_ERROR,
@@ -3874,10 +3905,10 @@ fu_engine_get_details (FuEngine *self, FuEngineRequest *request, gint fd, GError
 	}
 
 	/* build the index */
-	if (!xb_silo_query_build_index (silo, "components/component/provides/firmware",
+	if (!xb_silo_query_build_index (silo, "components/component[@type='firmware']/provides/firmware",
 					"type", error))
 		return NULL;
-	if (!xb_silo_query_build_index (silo, "components/component/provides/firmware",
+	if (!xb_silo_query_build_index (silo, "components/component[@type='firmware']/provides/firmware",
 					NULL, error))
 		return NULL;
 
@@ -4404,7 +4435,7 @@ fu_engine_get_releases_for_device (FuEngine *self,
 	for (guint i = 0; i < device_guids->len; i++) {
 		const gchar *guid = g_ptr_array_index (device_guids, i);
 		xb_string_append_union (xpath,
-					"components/component/"
+					"components/component[@type='firmware']/"
 					"provides/firmware[@type=$'flashed'][text()=$'%s']/"
 					"../..", guid);
 	}
@@ -4450,9 +4481,11 @@ fu_engine_get_releases_for_device (FuEngine *self,
 	for (guint i = 0; i < releases->len; i++) {
 		FwupdRelease *rel_tmp = FWUPD_RELEASE (g_ptr_array_index (releases, i));
 		const gchar *branch_tmp = fu_engine_get_branch_fallback (fwupd_release_get_branch (rel_tmp));
+#if GLIB_CHECK_VERSION(2,54,3)
 		if (g_ptr_array_find_with_equal_func (branches, branch_tmp,
 						      g_str_equal, NULL))
 			continue;
+#endif
 		g_ptr_array_add (branches, g_strdup (branch_tmp));
 	}
 	if (branches->len > 1)
@@ -5417,6 +5450,12 @@ fu_engine_udev_device_add (FuEngine *self, GUdevDevice *udev_device)
 		return;
 	}
 
+	/* super useful for plugin development */
+	if (g_getenv ("FWUPD_PROBE_VERBOSE") != NULL) {
+		g_autofree gchar *str = fu_device_to_string (FU_DEVICE (device));
+		g_debug ("%s", str);
+	}
+
 	/* can be specified using a quirk */
 	possible_plugins = fu_device_get_possible_plugins (FU_DEVICE (device));
 	for (guint i = 0; i < possible_plugins->len; i++) {
@@ -5564,9 +5603,10 @@ fu_engine_enumerate_udev (FuEngine *self)
 		const gchar *subsystem = g_ptr_array_index (self->udev_subsystems, i);
 		GList *devices = g_udev_client_query_by_subsystem (self->gudev_client,
 								   subsystem);
-		if (g_list_length (devices) > 0)
+		if (g_getenv ("FWUPD_PROBE_VERBOSE") != NULL) {
 			g_debug ("%u devices with subsystem %s",
 				 g_list_length (devices), subsystem);
+		}
 		for (GList *l = devices; l != NULL; l = l->next) {
 			GUdevDevice *udev_device = l->data;
 			fu_engine_udev_device_add (self, udev_device);
@@ -5674,7 +5714,7 @@ fu_engine_plugin_check_supported_cb (FuPlugin *plugin, const gchar *guid, FuEngi
 	if (fu_config_get_enumerate_all_devices (self->config))
 		return TRUE;
 
-	xpath = g_strdup_printf ("components/component/"
+	xpath = g_strdup_printf ("components/component[@type='firmware']/"
 				 "provides/firmware[@type='flashed'][text()='%s']",
 				 guid);
 	n = xb_silo_query_first (self->silo, xpath, NULL);
@@ -6258,7 +6298,7 @@ fu_engine_ensure_client_certificate (FuEngine *self)
 /**
  * fu_engine_load:
  * @self: A #FuEngine
- * @flags: #FuEngineLoadFlags, e.g. %FU_ENGINE_LOAD_FLAG_READONLY_FS
+ * @flags: #FuEngineLoadFlags, e.g. %FU_ENGINE_LOAD_FLAG_READONLY
  * @error: A #GError, or %NULL
  *
  * Load the firmware update engine so it is ready for use.
@@ -6268,7 +6308,6 @@ fu_engine_ensure_client_certificate (FuEngine *self)
 gboolean
 fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 {
-	FuRemoteListLoadFlags remote_list_flags = FU_REMOTE_LIST_LOAD_FLAG_NONE;
 	FuQuirksLoadFlags quirks_flags = FU_QUIRKS_LOAD_FLAG_NONE;
 	g_autoptr(GPtrArray) checksums_approved = NULL;
 	g_autoptr(GPtrArray) checksums_blocked = NULL;
@@ -6297,11 +6336,14 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	}
 
 	/* read remotes */
-	if (flags & FU_ENGINE_LOAD_FLAG_READONLY_FS)
-		remote_list_flags |= FU_REMOTE_LIST_LOAD_FLAG_READONLY_FS;
-	if (!fu_remote_list_load (self->remote_list, remote_list_flags, error)) {
-		g_prefix_error (error, "Failed to load remotes: ");
-		return FALSE;
+	if (flags & FU_ENGINE_LOAD_FLAG_REMOTES) {
+		FuRemoteListLoadFlags remote_list_flags = FU_REMOTE_LIST_LOAD_FLAG_NONE;
+		if (flags & FU_ENGINE_LOAD_FLAG_READONLY)
+			remote_list_flags |= FU_REMOTE_LIST_LOAD_FLAG_READONLY_FS;
+		if (!fu_remote_list_load (self->remote_list, remote_list_flags, error)) {
+			g_prefix_error (error, "Failed to load remotes: ");
+			return FALSE;
+		}
 	}
 
 	/* create client certificate */
@@ -6340,10 +6382,12 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 		fu_idle_set_timeout (self->idle, fu_config_get_idle_timeout (self->config));
 
 	/* load quirks, SMBIOS and the hwids */
-	fu_engine_load_smbios (self);
-	fu_engine_load_hwids (self);
+	if (flags & FU_ENGINE_LOAD_FLAG_HWINFO) {
+		fu_engine_load_smbios (self);
+		fu_engine_load_hwids (self);
+	}
 	/* on a read-only filesystem don't care about the cache GUID */
-	if (flags & FU_ENGINE_LOAD_FLAG_READONLY_FS)
+	if (flags & FU_ENGINE_LOAD_FLAG_READONLY)
 		quirks_flags |= FU_QUIRKS_LOAD_FLAG_READONLY_FS;
 	fu_engine_load_quirks (self, quirks_flags);
 
@@ -6408,7 +6452,7 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 
 	/* add devices */
 	fu_engine_plugins_setup (self);
-	if ((flags & FU_ENGINE_LOAD_FLAG_NO_ENUMERATE) == 0)
+	if (flags & FU_ENGINE_LOAD_FLAG_COLDPLUG)
 		fu_engine_plugins_coldplug (self, FALSE);
 
 	/* coldplug USB devices */
@@ -6418,12 +6462,12 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	g_signal_connect (self->usb_ctx, "device-removed",
 			  G_CALLBACK (fu_engine_usb_device_removed_cb),
 			  self);
-	if ((flags & FU_ENGINE_LOAD_FLAG_NO_ENUMERATE) == 0)
+	if (flags & FU_ENGINE_LOAD_FLAG_COLDPLUG)
 		g_usb_context_enumerate (self->usb_ctx);
 
 #ifdef HAVE_GUDEV
 	/* coldplug udev devices */
-	if ((flags & FU_ENGINE_LOAD_FLAG_NO_ENUMERATE) == 0)
+	if (flags & FU_ENGINE_LOAD_FLAG_COLDPLUG)
 		fu_engine_enumerate_udev (self);
 #endif
 

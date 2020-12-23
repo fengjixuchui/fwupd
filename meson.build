@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.5.2',
+  version : '1.5.5',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -73,7 +73,6 @@ warning_flags = [
   '-Wformat-signedness',
   '-Wignored-qualifiers',
   '-Wimplicit-function-declaration',
-  '-Wincompatible-pointer-types-discards-qualifiers',
   '-Winit-self',
   '-Wlogical-op',
   '-Wmaybe-uninitialized',
@@ -112,6 +111,18 @@ warning_flags = [
 ]
 cc = meson.get_compiler('c')
 add_project_arguments(cc.get_supported_arguments(warning_flags), language : 'c')
+
+# oss-fuzz requires linking with CXX...
+link_language = get_option('link_language')
+if link_language != 'c'
+  add_languages(link_language)
+endif
+
+# use honggfuzz for parallel persistent fuzzing
+honggfuzz = find_program('honggfuzz', required: false)
+if cc.has_function('HF_ITER')
+  conf.set('HAVE_HF_ITER', '1')
+endif
 
 if not meson.is_cross_build()
   add_project_arguments('-fstack-protector-strong', language : 'c')
@@ -208,7 +219,13 @@ endif
 libjcat = dependency('jcat', version : '>= 0.1.0', fallback : ['libjcat', 'libjcat_dep'])
 libjsonglib = dependency('json-glib-1.0', version : '>= 1.1.1')
 valgrind = dependency('valgrind', required: false)
-soup = dependency('libsoup-2.4', version : '>= 2.51.92')
+libcurl = dependency('libcurl', version : '>= 7.47.0')
+if libcurl.version().version_compare('>= 7.56.0')
+  conf.set('HAVE_LIBCURL_7_56_0', '1')
+endif
+if libcurl.version().version_compare('>= 7.62.0')
+  conf.set('HAVE_LIBCURL_7_62_0', '1')
+endif
 if build_daemon
   if get_option('polkit')
     polkit = dependency('polkit-gobject-1', version : '>= 0.103')
@@ -273,7 +290,9 @@ endif
 if cc.has_header('fnmatch.h')
   conf.set('HAVE_FNMATCH_H', '1')
 endif
-if cc.has_header('cpuid.h') and (host_cpu == 'x86' or host_cpu == 'x86_64')
+if cc.has_header('cpuid.h') and \
+   cc.has_header_symbol('cpuid.h', '__get_cpuid_count') and \
+   (host_cpu == 'x86' or host_cpu == 'x86_64')
   conf.set('HAVE_CPUID_H', '1')
 else
   if get_option('plugin_msr')
@@ -288,6 +307,9 @@ if cc.has_function('realpath')
 endif
 if cc.has_function('sigaction')
   conf.set('HAVE_SIGACTION', '1')
+endif
+if cc.has_function('memfd_create')
+  conf.set('HAVE_MEMFD_CREATE', '1')
 endif
 if cc.has_header_symbol('locale.h', 'LC_MESSAGES')
   conf.set('HAVE_LC_MESSAGES', '1')
@@ -355,6 +377,10 @@ if build_standalone and get_option('plugin_modem_manager')
   add_project_arguments('-DQMI_REQUIRED_VERSION="1.23.1"', language : 'c')
 endif
 
+if get_option('soup_session_compat')
+    conf.set('SOUP_SESSION_COMPAT', '1')
+endif
+
 if build_standalone and get_option('plugin_nvme')
   if not cc.has_header('linux/nvme_ioctl.h')
     error('NVMe support requires kernel >= 4.4')
@@ -384,10 +410,16 @@ if build_standalone and get_option('systemd')
     systemdunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir')
     systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir')
     systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir')
+    systemd_modules_load_dir = systemd.get_pkgconfig_variable('modulesloaddir')
   else
     systemdunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir', define_variable: ['rootprefix', systemd_root_prefix])
     systemdsystempresetdir = systemd.get_pkgconfig_variable('systemdsystempresetdir', define_variable: ['rootprefix', systemd_root_prefix])
-    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: [systemd.version().version_compare('>= 246') ? 'root_prefix' : 'rootprefix', systemd_root_prefix])
+    systemd_root_prefix_varname = 'root_prefix'
+    if systemd.version().version_compare('< 246')
+      systemd_root_prefix_varname = 'rootprefix'
+    endif
+    systemd_shutdown_dir = systemd.get_pkgconfig_variable('systemdshutdowndir', define_variable: [systemd_root_prefix_varname, systemd_root_prefix])
+    systemd_modules_load_dir = systemd.get_pkgconfig_variable('modulesloaddir', define_variable: [systemd_root_prefix_varname, systemd_root_prefix])
   endif
 else
   libsystemd = dependency('', required: false)
@@ -410,6 +442,7 @@ gnome = import('gnome')
 i18n = import('i18n')
 
 conf.set_quoted('FWUPD_BINDIR', bindir)
+conf.set_quoted('FWUPD_LIBDIR', libdir)
 conf.set_quoted('FWUPD_LIBEXECDIR', libexecdir)
 conf.set_quoted('FWUPD_DATADIR', datadir)
 conf.set_quoted('FWUPD_LOCALSTATEDIR', localstatedir)
@@ -446,7 +479,6 @@ if build_standalone
   plugin_deps += giounix
   plugin_deps += gmodule
   plugin_deps += gusb
-  plugin_deps += soup
   plugin_deps += libarchive
   plugin_deps += gudev
   plugin_deps += libjsonglib

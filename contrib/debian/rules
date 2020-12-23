@@ -6,30 +6,50 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DEB_LDFLAGS_MAINT_STRIP=-Wl,-Bsymbolic-functions
 
 #GPGME needs this for proper building on 32 bit archs
-ifeq "$(DEB_HOST_ARCH_BITS)" "32"
+ifeq ($(DEB_HOST_ARCH_BITS),32)
 	export DEB_CFLAGS_MAINT_APPEND = -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
 endif
 
+CONFARGS =
+
 ifneq ($(CI),)
-	export CI=--werror --wrap-mode=default
+	CONFARGS += --werror --wrap-mode=default
 endif
 
 SB_STYLE := debian
 deb_version := $(shell dpkg-parsechangelog --show-field Version)
-export FLASHROM=-Dplugin_flashrom=false
 ifeq (yes,$(shell dpkg-vendor --derives-from Ubuntu && echo yes))
 	SB_STYLE := ubuntu
 	tar_name := fwupd_$(deb_version)_$(DEB_HOST_ARCH).tar.gz
+	CONFARGS += -Dplugin_flashrom=false
 else
 	TMPLDIR  := debian/fwupd-$(DEB_HOST_ARCH)-signed-template/usr/share/code-signing/fwupd-$(DEB_HOST_ARCH)-signed-template
-	ifneq "$(DEB_HOST_ARCH)" "ia64"
-		export FLASHROM=-Dplugin_flashrom=true
+	ifneq ($(DEB_HOST_ARCH_CPU),ia64)
+		CONFARGS += -Dplugin_flashrom=true
+	else
+		CONFARGS += -Dplugin_flashrom=false
 	endif
 endif
-export MSR=-Dplugin_msr=false
-ifeq ("$(DEB_HOST_ARCH)",$(filter $(DEB_HOST_ARCH),i386 amd64))
-	export MSR=-Dplugin_msr=true
+
+ifeq (yes,$(shell pkg-config --exists libsmbios_c && echo yes))
+	CONFARGS += -Dplugin_dell=true
+else
+	CONFARGS += -Dplugin_dell=false
 endif
+
+ifeq (yes,$(shell pkg-config --exists efivar && echo yes))
+	CONFARGS += -Dplugin_uefi=true
+else
+	CONFARGS += -Dplugin_uefi=false
+endif
+
+ifneq ($(filter $(DEB_HOST_ARCH_CPU),i386 amd64),)
+	CONFARGS += -Dplugin_msr=true
+else
+	CONFARGS += -Dplugin_msr=false
+endif
+
+CONFARGS += -Dplugin_dummy=true -Dgtkdoc=true -Dsupported_build=true
 
 %:
 	dh $@ --with gir
@@ -42,26 +62,16 @@ ifeq (ubuntu,$(SB_STYLE))
 endif
 
 override_dh_auto_configure:
-	if pkg-config --exists libsmbios_c; then \
-		export DELL="-Dplugin_dell=true"; \
-	else \
-		export DELL="-Dplugin_dell=false"; \
-	fi; \
-	if pkg-config --exists efivar; then \
-		export UEFI="-Dplugin_uefi=true -Dplugin_redfish=true -Dplugin_nvme=true"; \
-	else \
-		export UEFI="-Dplugin_uefi=false -Dplugin_redfish=false -Dplugin_nvme=false"; \
-	fi; \
-	dh_auto_configure -- $$UEFI $$DELL $$FLASHROM $$MSR $$CI -Dplugin_dummy=true -Dgtkdoc=true -Dsupported_build=true
+	dh_auto_configure -- $(CONFARGS)
 
 override_dh_install:
 	find debian/tmp/usr -type f -name "*a" -print | xargs rm -f
-	sed -i 's,wheel,sudo,' ./debian/tmp/usr/share/polkit-1/rules.d/org.freedesktop.fwupd.rules
+	sed -i 's,wheel,sudo,' debian/tmp/usr/share/polkit-1/rules.d/org.freedesktop.fwupd.rules
 	dh_install
 	#install the EFI binaries if needed
-	if [ -d debian/tmp/usr/libexec/fwupd/efi/ ]; then \
-		dh_install -pfwupd usr/libexec/fwupd/efi ;\
-	fi
+	[ ! -d debian/tmp/usr/libexec/fwupd/efi/ ] || dh_install -pfwupd usr/libexec/fwupd/efi
+	#install MSR conf if needed
+	[ ! -d debian/tmp/usr/lib/modules-load.d ] || dh_install -pfwupd usr/lib/modules-load.d
 	dh_missing -a --fail-missing
 
 	#this is placed in fwupd-tests
@@ -76,32 +86,32 @@ ifeq (debian,$(SB_STYLE))
 	cp debian/README.Debian $(TMPLDIR)/source-template/debian
 	find $(TMPLDIR)/source-template/debian -type f | xargs sed -i "s,SIGNARCH,$(DEB_HOST_ARCH),"
 	find $(TMPLDIR)/source-template/debian -type f | xargs sed -i "s,SIGNVERSION,$(deb_version),"
-	for file in $$(find $(TMPLDIR)/source-template/debian -type f -name *SIGNARCH*); do file1=$$(echo $$file | sed "s,SIGNARCH,$(DEB_HOST_ARCH),"); mv -v $$file $$file1; done
+	set -e; for file in $$(find $(TMPLDIR)/source-template/debian -type f -name '*SIGNARCH*'); do \
+		file1=$$(echo $$file | sed "s,SIGNARCH,$(DEB_HOST_ARCH),"); \
+		mv -v $$file $$file1; \
+	done
 	install -m 0755 debian/fwupd.postinst $(TMPLDIR)/source-template/debian/fwupd-$(DEB_HOST_ARCH)-signed.postinst
 	install -m 0755 debian/fwupd.postrm $(TMPLDIR)/source-template/debian/fwupd-$(DEB_HOST_ARCH)-signed.postrm
-	./debian/gen_signing_changelog $(TMPLDIR)/source-template/debian fwupd $(DEB_HOST_ARCH)
-	./debian/gen_signing_json $(TMPLDIR) fwupd ${DEB_HOST_ARCH}
+	debian/gen_signing_changelog $(TMPLDIR)/source-template/debian fwupd $(DEB_HOST_ARCH)
+	debian/gen_signing_json $(TMPLDIR) fwupd ${DEB_HOST_ARCH}
 endif
 
 override_dh_strip_nondeterminism:
 	dh_strip_nondeterminism -Xfirmware-example.xml.gz
 
+ifneq (yes,$(shell command -v valgrind >/dev/null 2>&1 && echo yes))
 override_dh_auto_test:
-	if [ -x /usr/bin/valgrind ] ; then \
-		dh_auto_test; \
-	fi
+	:
+endif
 
 override_dh_builddeb:
 	dh_builddeb
 ifeq (ubuntu,$(SB_STYLE))
-	if [ -d debian/tmp/usr/libexec/fwupd/efi/ ]; then \
-		mkdir -p debian/fwupd-images/$(deb_version) ;\
-		cp debian/tmp/usr/libexec/fwupd/efi/fwupd*.efi debian/fwupd-images/$(deb_version) ;\
-		echo $(deb_version) > debian/fwupd-images/$(deb_version)/version ;\
-		tar -C debian/fwupd-images -czvf ../$(tar_name) . ;\
-		dpkg-distaddfile $(tar_name) raw-uefi - ;\
+	set -e; if [ -d debian/tmp/usr/libexec/fwupd/efi/ ]; then \
+		mkdir -p debian/fwupd-images/$(deb_version); \
+		cp debian/tmp/usr/libexec/fwupd/efi/fwupd*.efi debian/fwupd-images/$(deb_version); \
+		echo $(deb_version) > debian/fwupd-images/$(deb_version)/version; \
+		tar -C debian/fwupd-images -czvf ../$(tar_name) .; \
+		dpkg-distaddfile $(tar_name) raw-uefi -; \
 	fi
 endif
-
-override_dh_shlibdeps:
-	dh_shlibdeps $$DHSLIBS

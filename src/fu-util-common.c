@@ -13,6 +13,7 @@
 #include <gusb.h>
 #include <xmlb.h>
 #include <fwupd.h>
+#include <curl/curl.h>
 
 #include "fu-common.h"
 #include "fu-device-private.h"
@@ -1583,7 +1584,6 @@ fu_util_remote_to_string (FwupdRemote *remote, guint idt)
 	FwupdKeyringKind keyring_kind = fwupd_remote_get_keyring_kind (remote);
 	const gchar *tmp;
 	gint priority;
-	gdouble age;
 
 	g_return_val_if_fail (FWUPD_IS_REMOTE (remote), NULL);
 
@@ -1615,10 +1615,11 @@ fu_util_remote_to_string (FwupdRemote *remote, guint idt)
 	}
 
 	/* optional parameters */
-	age = fwupd_remote_get_age (remote);
 	if (kind == FWUPD_REMOTE_KIND_DOWNLOAD &&
-		age > 0 && age != G_MAXUINT64) {
+	    fwupd_remote_get_age (remote) > 0 &&
+	    fwupd_remote_get_age (remote) != G_MAXUINT64) {
 		const gchar *unit = "s";
+		gdouble age = fwupd_remote_get_age (remote);
 		g_autofree gchar *age_str = NULL;
 		if (age > 60) {
 			age /= 60.f;
@@ -2005,5 +2006,21 @@ fu_util_show_unsupported_warn (void)
 	fmt = fu_util_term_format (_("WARNING:"), FU_UTIL_CLI_COLOR_YELLOW);
 	/* TRANSLATORS: unsupported build of the package */
 	g_printerr ("%s %s\n", fmt, _("This package has not been validated, it may not work properly."));
+#endif
+}
+
+#ifdef HAVE_LIBCURL_7_62_0
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(CURLU, curl_url_cleanup)
+#endif
+
+gboolean
+fu_util_is_url (const gchar *perhaps_url)
+{
+#ifdef HAVE_LIBCURL_7_62_0
+	g_autoptr(CURLU) h = curl_url ();
+	return curl_url_set (h, CURLUPART_URL, perhaps_url, 0) == CURLUE_OK;
+#else
+	return g_str_has_prefix (perhaps_url, "http://") ||
+		g_str_has_prefix (perhaps_url, "https://");
 #endif
 }
