@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2018 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2017 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include "fu-plugin-vfuncs.h"
-#include "fu-hash.h"
 
 #include "fu-redfish-client.h"
 #include "fu-redfish-common.h"

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020 Evan Lojewski
+ * Copyright (C) 2018 Evan Lojewski
  * Copyright (C) 2020 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
@@ -586,6 +586,8 @@ fu_bcm57xx_firmware_init (FuBcm57xxFirmware *self)
 	self->source_size = BCM_FIRMWARE_SIZE;
 	self->source_padchar = 0xff;
 	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_DEDUPE_ID);
+	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_HAS_CHECKSUM);
+	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_HAS_VID_PID);
 }
 
 static void

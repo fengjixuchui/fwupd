@@ -13,11 +13,22 @@ daemon_dep = [
   giounix,
   gmodule,
   gudev,
-  gusb,
   sqlite,
-  libarchive,
   libjsonglib,
 ]
+
+client_dep = [
+  gudev,
+]
+
+if get_option('gusb')
+  daemon_dep += gusb
+  client_dep += gusb
+endif
+
+if get_option('libarchive')
+  daemon_dep += libarchive
+endif
 
 if get_option('systemd')
   systemd_src += 'fu-systemd.c'
@@ -39,9 +50,17 @@ daemon_src = [
   'fu-install-task.c',
   'fu-keyring-utils.c',
   'fu-plugin-list.c',
+  'fu-backend.c',
   'fu-remote-list.c',
   'fu-security-attr.c',
 ] + systemd_src
+
+if get_option('gudev')
+  daemon_src += 'fu-udev-backend.c'
+endif
+if get_option('gusb')
+  daemon_src += 'fu-usb-backend.c'
+endif
 
 if build_daemon
 fwupdmgr = executable(
@@ -61,14 +80,10 @@ fwupdmgr = executable(
     fwupdplugin_incdir,
   ],
   dependencies : [
-    libcurl,
+    libfwupd_deps,
     libxmlb,
-    giounix,
-    gudev,
-    gusb,
+    client_dep,
     sqlite,
-    libarchive,
-    libjsonglib,
   ],
   link_with : [
     fwupd,
@@ -94,12 +109,9 @@ fwupdagent = executable(
     fwupdplugin_incdir,
   ],
   dependencies : [
-    libcurl,
+    libfwupd_deps,
     libxmlb,
-    giounix,
-    gudev,
-    gusb,
-    libjsonglib,
+    client_dep,
   ],
   link_with : [
     fwupd,
@@ -126,11 +138,8 @@ fwupdoffline = executable(
     fwupdplugin_incdir,
   ],
   dependencies : [
-    giounix,
-    gudev,
-    gusb,
-    libcurl,
-    libjsonglib,
+    libfwupd_deps,
+    client_dep,
     libxmlb,
     sqlite,
   ],
@@ -167,18 +176,12 @@ fwupdtool = executable(
     fwupdplugin_incdir,
   ],
   dependencies : [
-    libcurl,
-    libjcat,
+    libfwupd_deps,
     libxmlb,
     libgcab,
-    giounix,
-    gmodule,
-    gudev,
-    gusb,
+    client_dep,
     sqlite,
     valgrind,
-    libarchive,
-    libjsonglib,
   ],
   link_with : [
     fwupd,

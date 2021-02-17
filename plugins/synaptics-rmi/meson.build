@@ -8,12 +8,14 @@ shared_module('fu_plugin_synaptics_rmi',
   fu_hash,
   sources : [
     'fu-plugin-synaptics-rmi.c',
-    'fu-synaptics-rmi-common.c',
+    'fu-synaptics-rmi-common.c',      # fuzzing
     'fu-synaptics-rmi-device.c',
+    'fu-synaptics-rmi-hid-device.c',
+    'fu-synaptics-rmi-ps2-device.c',
     'fu-synaptics-rmi-v5-device.c',
     'fu-synaptics-rmi-v6-device.c',
     'fu-synaptics-rmi-v7-device.c',
-    'fu-synaptics-rmi-firmware.c',
+    'fu-synaptics-rmi-firmware.c',    # fuzzing
   ],
   include_directories : [
     root_incdir,
@@ -25,35 +27,10 @@ shared_module('fu_plugin_synaptics_rmi',
   c_args : cargs,
   dependencies : [
     plugin_deps,
+    gnutls,
   ],
   link_with : [
     fwupd,
     fwupdplugin,
   ],
 )
-
-if get_option('tests')
-  # for fuzzing
-  synaptics_rmi_dump = executable(
-    'synaptics-rmi-dump',
-    sources : [
-      'fu-dump.c',
-      'fu-synaptics-rmi-common.c',
-      'fu-synaptics-rmi-firmware.c',
-    ],
-    include_directories : [
-      root_incdir,
-      fwupd_incdir,
-      fwupdplugin_incdir,
-    ],
-    dependencies : [
-      gio,
-      libxmlb,
-    ],
-    link_with : [
-      fwupd,
-      fwupdplugin,
-    ],
-    c_args : cargs
-  )
-endif

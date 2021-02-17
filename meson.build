@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.5.5',
+  version : '1.5.7',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -86,7 +86,6 @@ warning_flags = [
   '-Wno-cast-function-type',
   '-Wno-address-of-packed-member',  # incompatible with g_autoptr()
   '-Wno-unknown-pragmas',
-  '-Wno-deprecated-declarations',
   '-Wno-missing-field-initializers',
   '-Wno-strict-aliasing',
   '-Wno-suggest-attribute=format',
@@ -111,12 +110,6 @@ warning_flags = [
 ]
 cc = meson.get_compiler('c')
 add_project_arguments(cc.get_supported_arguments(warning_flags), language : 'c')
-
-# oss-fuzz requires linking with CXX...
-link_language = get_option('link_language')
-if link_language != 'c'
-  add_languages(link_language)
-endif
 
 # use honggfuzz for parallel persistent fuzzing
 honggfuzz = find_program('honggfuzz', required: false)
@@ -146,6 +139,8 @@ add_project_link_arguments(
   global_link_args,
   language: 'c'
 )
+
+add_project_arguments('-DFWUPD_COMPILATION', language : 'c')
 
 # Needed for realpath(), syscall(), cfmakeraw(), etc.
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')
@@ -212,19 +207,25 @@ else
   gudev = dependency('', required : false)
 endif
 libxmlb = dependency('xmlb', version : '>= 0.1.13', fallback : ['libxmlb', 'libxmlb_dep'])
-gusb = dependency('gusb', version : '>= 0.3.5', fallback : ['gusb', 'gusb_dep'])
+if get_option('gusb')
+  gusb = dependency('gusb', version : '>= 0.3.5', fallback : ['gusb', 'gusb_dep'])
+  conf.set('HAVE_GUSB', '1')
+endif
 sqlite = dependency('sqlite3')
-libarchive = dependency('libarchive')
+if get_option('libarchive')
+  libarchive = dependency('libarchive')
+  conf.set('HAVE_LIBARCHIVE', '1')
+endif
 endif
 libjcat = dependency('jcat', version : '>= 0.1.0', fallback : ['libjcat', 'libjcat_dep'])
 libjsonglib = dependency('json-glib-1.0', version : '>= 1.1.1')
 valgrind = dependency('valgrind', required: false)
-libcurl = dependency('libcurl', version : '>= 7.47.0')
-if libcurl.version().version_compare('>= 7.56.0')
-  conf.set('HAVE_LIBCURL_7_56_0', '1')
-endif
-if libcurl.version().version_compare('>= 7.62.0')
-  conf.set('HAVE_LIBCURL_7_62_0', '1')
+if get_option('curl')
+  libcurl = dependency('libcurl', version : '>= 7.56.0')
+  conf.set('HAVE_LIBCURL', '1')
+  if libcurl.version().version_compare('>= 7.62.0')
+    conf.set('HAVE_LIBCURL_7_62_0', '1')
+  endif
 endif
 if build_daemon
   if get_option('polkit')
@@ -248,6 +249,18 @@ libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gca
 gcab = find_program('gcab', required : get_option('tests'))
 bashcomp = dependency('bash-completion', required: false)
 python3 = find_program('python3')
+
+if get_option('gnutls')
+  gnutls = dependency('gnutls', version : '>= 3.6.0')
+  conf.set('HAVE_GNUTLS', '1')
+else
+  if get_option('plugin_uefi_pk')
+    error('plugin_uefi_pk needs -Dgnutls=true to work')
+  endif
+  if get_option('plugin_synaptics_rmi')
+    error('plugin_synaptics_rmi needs -Dgnutls=true to work')
+  endif
+endif
 
 platform_deps = []
 if get_option('default_library') != 'static'
@@ -281,6 +294,9 @@ endif
 if cc.has_header('linux/ethtool.h')
   conf.set('HAVE_ETHTOOL_H', '1')
 endif
+if cc.has_header('linux/hidraw.h')
+  conf.set('HAVE_HIDRAW_H', '1')
+endif
 if cc.has_header('sys/mman.h')
   conf.set('HAVE_MMAN_H', '1')
 endif
@@ -290,9 +306,7 @@ endif
 if cc.has_header('fnmatch.h')
   conf.set('HAVE_FNMATCH_H', '1')
 endif
-if cc.has_header('cpuid.h') and \
-   cc.has_header_symbol('cpuid.h', '__get_cpuid_count') and \
-   (host_cpu == 'x86' or host_cpu == 'x86_64')
+if cc.has_header('cpuid.h') and cc.has_header_symbol('cpuid.h', '__get_cpuid_count') and (host_cpu == 'x86' or host_cpu == 'x86_64')
   conf.set('HAVE_CPUID_H', '1')
 else
   if get_option('plugin_msr')
@@ -304,6 +318,9 @@ if cc.has_function('getuid')
 endif
 if cc.has_function('realpath')
   conf.set('HAVE_REALPATH', '1')
+endif
+if cc.has_function('memmem')
+  conf.set('HAVE_MEMMEM', '1')
 endif
 if cc.has_function('sigaction')
   conf.set('HAVE_SIGACTION', '1')
@@ -325,7 +342,7 @@ else
   tpm2tss = dependency('', required: false)
 endif
 
-if build_standalone and get_option('plugin_uefi')
+if build_standalone and get_option('plugin_uefi_capsule')
   cairo = dependency('cairo')
   fontconfig = cc.find_library('fontconfig')
   freetype = cc.find_library('freetype')
@@ -336,8 +353,6 @@ if build_standalone and get_option('plugin_uefi')
 
   efi_app_location = join_paths(libexecdir, 'fwupd', 'efi')
   conf.set_quoted ('EFI_APP_LOCATION', efi_app_location)
-
-  conf.set('EFI_OBJCOPY', get_option('efi-objcopy'))
 
   if host_cpu == 'x86'
           EFI_MACHINE_TYPE_NAME = 'ia32'
@@ -365,8 +380,8 @@ endif
 if build_standalone and get_option('plugin_dell')
   libsmbios_c = dependency('libsmbios_c', version : '>= 2.4.0')
   conf.set('HAVE_DELL', '1')
-  if not get_option('plugin_uefi')
-    error('plugin_dell also needs plugin_uefi to work')
+  if not get_option('plugin_uefi_capsule')
+    error('plugin_dell also needs plugin_uefi_capsule to work')
   endif
 endif
 
@@ -385,10 +400,6 @@ if build_standalone and get_option('plugin_nvme')
   if not cc.has_header('linux/nvme_ioctl.h')
     error('NVMe support requires kernel >= 4.4')
   endif
-endif
-
-if build_standalone and get_option('plugin_synaptics')
-    conf.set('HAVE_SYNAPTICS', '1')
 endif
 
 if build_standalone and get_option('plugin_thunderbolt')
@@ -458,6 +469,11 @@ endif
 conf.set_quoted('FWUPD_PLUGINDIR', plugin_dir)
 endif
 
+# sanity check, otherwise there is not point building
+if host_machine.system() == 'windows' and not get_option('gusb')
+  error('-Dgusb=true is required for Windows build')
+endif
+
 conf.set_quoted('GETTEXT_PACKAGE', meson.project_name())
 conf.set_quoted('PACKAGE_NAME', meson.project_name())
 conf.set_quoted('VERSION', meson.project_version())
@@ -478,10 +494,16 @@ if build_standalone
   plugin_deps += gio
   plugin_deps += giounix
   plugin_deps += gmodule
-  plugin_deps += gusb
-  plugin_deps += libarchive
   plugin_deps += gudev
   plugin_deps += libjsonglib
+endif
+
+if get_option('gusb')
+  plugin_deps += gusb
+endif
+
+if get_option('libarchive')
+  plugin_deps += libarchive
 endif
 
 root_incdir = include_directories('.')

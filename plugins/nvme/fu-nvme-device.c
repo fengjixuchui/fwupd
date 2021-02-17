@@ -169,7 +169,8 @@ fu_nvme_device_parse_cns_maybe_dell (FuNvmeDevice *self, const guint8 *buf)
 
 	/* do not add the FuUdevDevice instance IDs as generic firmware
 	 * should not be used on these OEM-specific devices */
-	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_NO_AUTO_INSTANCE_IDS);
+	fu_device_add_internal_flag (FU_DEVICE (self),
+				     FU_DEVICE_INTERNAL_FLAG_NO_AUTO_INSTANCE_IDS);
 
 	/* add instance ID *and* GUID as using no-auto-instance-ids */
 	devid = g_strdup_printf ("STORAGE-DELL-%s", component_id);
@@ -341,9 +342,9 @@ fu_nvme_device_write_firmware (FuDevice *device,
 	for (guint i = 0; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks, i);
 		if (!fu_nvme_device_fw_download (self,
-						 chk->address,
-						 chk->data,
-						 chk->data_sz,
+						 fu_chunk_get_address (chk),
+						 fu_chunk_get_data (chk),
+						 fu_chunk_get_data_sz (chk),
 						 error)) {
 			g_prefix_error (error, "failed to write chunk %u: ", i);
 			return FALSE;

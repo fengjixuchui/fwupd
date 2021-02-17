@@ -18,7 +18,7 @@ cp -R ../../../!(build|dist) .
 popd
 chown nobody . -R
 
-# install and run TPM simulator necessary for plugins/uefi/uefi-self-test
+# install and run TPM simulator necessary for plugins/uefi-capsule/uefi-self-test
 pacman -Syu --noconfirm swtpm tpm2-tools
 swtpm socket --tpm2 --server port=2321 --ctrl type=tcp,port=2322 --flags not-need-init --tpmstate "dir=$PWD" &
 trap "kill $!" EXIT
@@ -36,6 +36,10 @@ pacman -U --noconfirm *.pkg.*
 pacman -Syu --noconfirm qt5-base
 meson qt5-thread-test ../contrib/ci/qt5-thread-test
 ninja -C qt5-thread-test test
+
+#run the CI tests for making sure we can link fwupd/fwupdplugin
+meson out-of-tree-link ../contrib/ci/out-of-tree-link
+ninja -C out-of-tree-link test
 
 # move the package to working dir
 mv *.pkg.* ../dist

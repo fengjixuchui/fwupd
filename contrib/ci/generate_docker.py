@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 #
-# Copyright (C) 2017-2018 Dell, Inc.
+# Copyright (C) 2017 Dell, Inc.
 #
 # SPDX-License-Identifier: LGPL-2.1+
 #
@@ -9,6 +9,7 @@ import subprocess
 import sys
 import shutil
 from generate_dependencies import parse_dependencies
+
 
 def get_container_cmd():
     '''return docker or podman as container manager'''

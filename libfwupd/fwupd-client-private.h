@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2020 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -30,6 +30,12 @@ void		 fwupd_client_update_metadata_stream_async(FwupdClient	*self,
 							 const gchar	*remote_id,
 							 GUnixInputStream *istr,
 							 GUnixInputStream *istr_sig,
+							 GCancellable	*cancellable,
+							 GAsyncReadyCallback callback,
+							 gpointer	 callback_data);
+void		 fwupd_client_download_bytes2_async	(FwupdClient	*self,
+							 GPtrArray	*urls,
+							 FwupdClientDownloadFlags flags,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);

@@ -1,27 +1,30 @@
 fwupdplugin_src = [
   'fu-archive.c',
   'fu-cabinet.c',
-  'fu-chunk.c',
-  'fu-common.c',
+  'fu-chunk.c',             # fuzzing
+  'fu-common.c',            # fuzzing
   'fu-common-cab.c',
   'fu-common-guid.c',
-  'fu-common-version.c',
-  'fu-device-locker.c',
-  'fu-device.c',
-  'fu-dfu-firmware.c',
-  'fu-volume.c',
-  'fu-firmware.c',
-  'fu-firmware-common.c',
-  'fu-firmware-image.c',
-  'fu-fmap-firmware.c',
+  'fu-common-version.c',    # fuzzing
+  'fu-device-locker.c',     # fuzzing
+  'fu-device.c',            # fuzzing
+  'fu-dfu-firmware.c',      # fuzzing
+  'fu-volume.c',            # fuzzing
+  'fu-firmware.c',          # fuzzing
+  'fu-firmware-common.c',   # fuzzing
+  'fu-firmware-image.c',    # fuzzing
+  'fu-dfuse-firmware.c',    # fuzzing
+  'fu-fmap-firmware.c',     # fuzzing
   'fu-hwids.c',
-  'fu-ihex-firmware.c',
-  'fu-io-channel.c',
+  'fu-ihex-firmware.c',     # fuzzing
+  'fu-io-channel.c',        # fuzzing
   'fu-plugin.c',
-  'fu-quirks.c',
+  'fu-quirks.c',            # fuzzing
   'fu-security-attrs.c',
   'fu-smbios.c',
-  'fu-srec-firmware.c',
+  'fu-srec-firmware.c',     # fuzzing
+  'fu-efi-signature.c',
+  'fu-efi-signature-list.c',
   'fu-efivar.c',
   'fu-udev-device.c',
   'fu-usb-device.c',
@@ -36,6 +39,7 @@ fwupdplugin_headers = [
   'fu-common-cab.h',
   'fu-common-guid.h',
   'fu-common-version.h',
+  'fu-deprecated.h',
   'fu-device.h',
   'fu-device-metadata.h',
   'fu-device-locker.h',
@@ -45,6 +49,7 @@ fwupdplugin_headers = [
   'fu-firmware-common.h',
   'fu-firmware-image.h',
   'fu-fmap-firmware.h',
+  'fu-dfuse-firmware.h',
   'fu-hwids.h',
   'fu-ihex-firmware.h',
   'fu-io-channel.h',
@@ -53,6 +58,8 @@ fwupdplugin_headers = [
   'fu-security-attrs.h',
   'fu-smbios.h',
   'fu-srec-firmware.h',
+  'fu-efi-signature.h',
+  'fu-efi-signature-list.h',
   'fu-efivar.h',
   'fu-udev-device.h',
   'fu-usb-device.h',
@@ -88,8 +95,11 @@ introspection_deps = [
   libxmlb,
   libjcat,
   giounix,
-  gusb,
 ]
+
+if get_option('gusb')
+  introspection_deps += gusb
+endif
 
 if get_option('gudev')
   fwupdplugin_headers_private += 'fu-udev-device-private.h'
@@ -99,7 +109,6 @@ endif
 library_deps = [
   introspection_deps,
   gmodule,
-  libarchive,
   libjsonglib,
   libgcab,
   valgrind,
@@ -107,9 +116,13 @@ library_deps = [
   platform_deps,
 ]
 
+if get_option('libarchive')
+  library_deps += libarchive
+endif
+
 fwupdplugin_mapfile = 'fwupdplugin.map'
 vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), fwupdplugin_mapfile)
-fwupdplugin = shared_library(
+fwupdplugin = library(
   'fwupdplugin',
   sources : [
     fwupdplugin_src,
@@ -153,7 +166,7 @@ fwupdplugin_pkgg.generate(
   description : 'library for plugins to use to interact with fwupd daemon',
 )
 
-if get_option('introspection')
+if get_option('introspection') and get_option('gusb')
   gir_dep = declare_dependency(sources: fwupd_gir)
   if gusb.type_name() == 'internal'
     libgusb_girtarget = subproject('gusb').get_variable('libgusb_girtarget')[0]
@@ -211,6 +224,7 @@ if get_option('introspection')
       'LIBFWUPDPLUGIN',
       '@INPUT@',
       '@OUTPUT@',
+      '--override', 'fu_chunk_get_type', '1.5.6',
     ],
   )
 

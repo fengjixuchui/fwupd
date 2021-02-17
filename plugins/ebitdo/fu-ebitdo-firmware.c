@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2019 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -76,6 +76,7 @@ fu_ebitdo_firmware_parse (FuFirmware *firmware,
 	/* parse version */
 	version = g_strdup_printf ("%.2f", GUINT32_FROM_LE(hdr->version) / 100.f);
 	fu_firmware_set_version (firmware, version);
+	fu_firmware_set_version_raw (firmware, GUINT32_FROM_LE(hdr->version));
 
 	/* add header */
 	fw_hdr = fu_common_bytes_new_offset (fw, 0x0,

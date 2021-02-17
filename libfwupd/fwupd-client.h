@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2018 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -44,11 +44,13 @@ struct _FwupdClientClass
 /**
  * FwupdClientDownloadFlags:
  * @FWUPD_CLIENT_DOWNLOAD_FLAG_NONE:		No flags set
+ * @FWUPD_CLIENT_DOWNLOAD_FLAG_ONLY_IPFS:	Only use IPFS when downloading URIs
  *
  * The options to use for downloading.
  **/
 typedef enum {
 	FWUPD_CLIENT_DOWNLOAD_FLAG_NONE			= 0,		/* Since: 1.4.5 */
+	FWUPD_CLIENT_DOWNLOAD_FLAG_ONLY_IPFS		= 1 << 0,	/* Since: 1.5.6 */
 	/*< private >*/
 	FWUPD_CLIENT_DOWNLOAD_FLAG_LAST
 } FwupdClientDownloadFlags;
@@ -77,28 +79,32 @@ void		 fwupd_client_connect_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_connect_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_devices_async		(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_devices_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_plugins_async		(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_plugins_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_history_async		(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_history_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_releases_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -106,7 +112,8 @@ void		 fwupd_client_get_releases_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_releases_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_downgrades_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -114,7 +121,8 @@ void		 fwupd_client_get_downgrades_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_downgrades_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_upgrades_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -122,7 +130,8 @@ void		 fwupd_client_get_upgrades_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_upgrades_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_details_bytes_async	(FwupdClient	*self,
 							 GBytes		*bytes,
 							 GCancellable	*cancellable,
@@ -130,7 +139,8 @@ void		 fwupd_client_get_details_bytes_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_details_bytes_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_verify_async		(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -138,7 +148,8 @@ void		 fwupd_client_verify_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_verify_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_verify_update_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -146,7 +157,8 @@ void		 fwupd_client_verify_update_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_verify_update_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_unlock_async		(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -154,7 +166,8 @@ void		 fwupd_client_unlock_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_unlock_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_modify_config_async	(FwupdClient	*self,
 							 const gchar	*key,
 							 const gchar	*value,
@@ -163,7 +176,8 @@ void		 fwupd_client_modify_config_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_modify_config_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_activate_async		(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -171,7 +185,8 @@ void		 fwupd_client_activate_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_activate_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_clear_results_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -179,7 +194,8 @@ void		 fwupd_client_clear_results_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_clear_results_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_results_async		(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -187,14 +203,16 @@ void		 fwupd_client_get_results_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 FwupdDevice	*fwupd_client_get_results_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_host_security_attrs_async(FwupdClient *self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_host_security_attrs_finish(FwupdClient *self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_device_by_id_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GCancellable	*cancellable,
@@ -202,7 +220,8 @@ void		 fwupd_client_get_device_by_id_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 FwupdDevice	*fwupd_client_get_device_by_id_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_devices_by_guid_async	(FwupdClient	*self,
 							 const gchar	*guid,
 							 GCancellable	*cancellable,
@@ -210,7 +229,8 @@ void		 fwupd_client_get_devices_by_guid_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_devices_by_guid_finish (FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_install_async		(FwupdClient	*self,
 							 const gchar	*device_id,
 							 const gchar	*filename,
@@ -220,7 +240,8 @@ void		 fwupd_client_install_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_install_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_install_bytes_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 GBytes		*bytes,
@@ -230,17 +251,28 @@ void		 fwupd_client_install_bytes_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_install_bytes_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_install_release_async	(FwupdClient	*self,
 							 FwupdDevice	*device,
 							 FwupdRelease	*release,
 							 FwupdInstallFlags install_flags,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
+							 gpointer	 callback_data)
+G_DEPRECATED_FOR(fwupd_client_install_release2_async);
+void		 fwupd_client_install_release2_async	(FwupdClient	*self,
+							 FwupdDevice	*device,
+							 FwupdRelease	*release,
+							 FwupdInstallFlags install_flags,
+							 FwupdClientDownloadFlags download_flags,
+							 GCancellable	*cancellable,
+							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_install_release_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_update_metadata_bytes_async (FwupdClient	*self,
 							 const gchar	*remote_id,
 							 GBytes		*metadata,
@@ -250,7 +282,8 @@ void		 fwupd_client_update_metadata_bytes_async (FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_update_metadata_bytes_finish (FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_refresh_remote_async	(FwupdClient	*self,
 							 FwupdRemote	*remote,
 							 GCancellable	*cancellable,
@@ -258,7 +291,8 @@ void		 fwupd_client_refresh_remote_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_refresh_remote_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_modify_remote_async	(FwupdClient	*self,
 							 const gchar	*remote_id,
 							 const gchar	*key,
@@ -268,7 +302,8 @@ void		 fwupd_client_modify_remote_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_modify_remote_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_modify_device_async	(FwupdClient	*self,
 							 const gchar	*device_id,
 							 const gchar	*key,
@@ -278,14 +313,16 @@ void		 fwupd_client_modify_device_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_modify_device_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_report_metadata_async	(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GHashTable	*fwupd_client_get_report_metadata_finish(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 
 FwupdStatus	 fwupd_client_get_status		(FwupdClient	*self);
 gboolean	 fwupd_client_get_tainted		(FwupdClient	*self);
@@ -302,7 +339,8 @@ void		 fwupd_client_get_remotes_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_remotes_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_remote_by_id_async	(FwupdClient	*self,
 							 const gchar	*remote_id,
 							 GCancellable	*cancellable,
@@ -310,14 +348,16 @@ void		 fwupd_client_get_remote_by_id_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 FwupdRemote	*fwupd_client_get_remote_by_id_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_approved_firmware_async(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_approved_firmware_finish(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_set_approved_firmware_async (FwupdClient	*self,
 							 GPtrArray	*checksums,
 							 GCancellable	*cancellable,
@@ -325,14 +365,16 @@ void		 fwupd_client_set_approved_firmware_async (FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_set_approved_firmware_finish (FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_get_blocked_firmware_async(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GAsyncReadyCallback callback,
 							 gpointer	 callback_data);
 GPtrArray	*fwupd_client_get_blocked_firmware_finish(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_set_blocked_firmware_async (FwupdClient	*self,
 							 GPtrArray	*checksums,
 							 GCancellable	*cancellable,
@@ -340,7 +382,8 @@ void		 fwupd_client_set_blocked_firmware_async (FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_set_blocked_firmware_finish (FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_self_sign_async		(FwupdClient	*self,
 							 const gchar	*value,
 							 FwupdSelfSignFlags flags,
@@ -349,7 +392,8 @@ void		 fwupd_client_self_sign_async		(FwupdClient	*self,
 							 gpointer	 callback_data);
 gchar		*fwupd_client_self_sign_finish		(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_set_feature_flags_async	(FwupdClient	*self,
 							 FwupdFeatureFlags feature_flags,
 							 GCancellable	*cancellable,
@@ -357,7 +401,8 @@ void		 fwupd_client_set_feature_flags_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 gboolean	 fwupd_client_set_feature_flags_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 const gchar	*fwupd_client_get_user_agent		(FwupdClient	*self);
 void		 fwupd_client_set_user_agent		(FwupdClient	*self,
 							 const gchar	*user_agent);
@@ -372,7 +417,8 @@ void		 fwupd_client_download_bytes_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GBytes		*fwupd_client_download_bytes_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 void		 fwupd_client_upload_bytes_async	(FwupdClient	*self,
 							 const gchar	*url,
 							 const gchar	*payload,
@@ -383,8 +429,10 @@ void		 fwupd_client_upload_bytes_async	(FwupdClient	*self,
 							 gpointer	 callback_data);
 GBytes		*fwupd_client_upload_bytes_finish	(FwupdClient	*self,
 							 GAsyncResult	*res,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fwupd_client_ensure_networking		(FwupdClient	*self,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
 
 G_END_DECLS

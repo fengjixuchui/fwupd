@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2017 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -8,7 +8,7 @@
 
 #include <stdio.h>
 #include <glib/gi18n.h>
-#include <gusb.h>
+#include <gio/gio.h>
 
 #include "fu-systemd.h"
 

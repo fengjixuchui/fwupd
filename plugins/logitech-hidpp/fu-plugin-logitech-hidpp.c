@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2018 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -9,7 +9,6 @@
 #include <fwupd.h>
 
 #include "fu-plugin-vfuncs.h"
-#include "fu-hash.h"
 
 #include "fu-logitech-hidpp-bootloader-nordic.h"
 #include "fu-logitech-hidpp-bootloader-texas.h"

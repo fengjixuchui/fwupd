@@ -7,7 +7,13 @@
 #pragma once
 
 #include <glib-object.h>
+#ifdef HAVE_GUSB
 #include <gusb.h>
+#else
+typedef GObject GUsbContext;
+typedef GObject GUsbDevice;
+#define G_USB_CHECK_VERSION(a,c,b)	0
+#endif
 
 #include "fu-plugin.h"
 #include "fu-udev-device.h"
@@ -36,4 +42,5 @@ void		 fu_usb_device_set_dev			(FuUsbDevice	*device,
 							 GUsbDevice	*usb_device);
 gboolean	 fu_usb_device_is_open			(FuUsbDevice	*device);
 GUdevDevice	*fu_usb_device_find_udev_device		(FuUsbDevice	*device,
-							 GError		**error);
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;

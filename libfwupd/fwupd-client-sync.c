@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2020 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -47,6 +47,7 @@ fwupd_client_helper_free (FwupdClientHelper *helper)
 	g_free (helper->str);
 	g_main_loop_unref (helper->loop);
 	g_main_context_unref (helper->context);
+	g_main_context_pop_thread_default (helper->context);
 	g_free (helper);
 }
 
@@ -57,6 +58,7 @@ fwupd_client_helper_new (FwupdClient *self)
 	helper = g_new0 (FwupdClientHelper, 1);
 	helper->context = fwupd_client_get_main_context (self);
 	helper->loop = g_main_loop_new (helper->context, FALSE);
+	g_main_context_push_thread_default (helper->context);
 	return helper;
 }
 
@@ -1151,11 +1153,12 @@ fwupd_client_install_release_cb (GObject *source, GAsyncResult *res, gpointer us
 }
 
 /**
- * fwupd_client_install_release:
+ * fwupd_client_install_release2:
  * @self: A #FwupdClient
  * @device: A #FwupdDevice
  * @release: A #FwupdRelease
  * @install_flags: the #FwupdInstallFlags, e.g. %FWUPD_INSTALL_FLAG_ALLOW_REINSTALL
+ * @download_flags: the #FwupdClientDownloadFlags, e.g. %FWUPD_CLIENT_DOWNLOAD_FLAG_NONE
  * @cancellable: the #GCancellable, or %NULL
  * @error: the #GError, or %NULL
  *
@@ -1163,15 +1166,16 @@ fwupd_client_install_release_cb (GObject *source, GAsyncResult *res, gpointer us
  *
  * Returns: %TRUE for success
  *
- * Since: 1.4.5
+ * Since: 1.5.6
  **/
 gboolean
-fwupd_client_install_release (FwupdClient *self,
-			      FwupdDevice *device,
-			      FwupdRelease *release,
-			      FwupdInstallFlags install_flags,
-			      GCancellable *cancellable,
-			      GError **error)
+fwupd_client_install_release2 (FwupdClient *self,
+			       FwupdDevice *device,
+			       FwupdRelease *release,
+			       FwupdInstallFlags install_flags,
+			       FwupdClientDownloadFlags download_flags,
+			       GCancellable *cancellable,
+			       GError **error)
 {
 	g_autoptr(FwupdClientHelper) helper = NULL;
 
@@ -1187,16 +1191,46 @@ fwupd_client_install_release (FwupdClient *self,
 
 	/* call async version and run loop until complete */
 	helper = fwupd_client_helper_new (self);
-	fwupd_client_install_release_async (self, device, release,
-					    install_flags, cancellable,
-					    fwupd_client_install_release_cb,
-					    helper);
+	fwupd_client_install_release2_async (self, device, release,
+					     install_flags, download_flags,
+					     cancellable,
+					     fwupd_client_install_release_cb,
+					     helper);
 	g_main_loop_run (helper->loop);
 	if (!helper->ret) {
 		g_propagate_error (error, g_steal_pointer (&helper->error));
 		return FALSE;
 	}
 	return TRUE;
+}
+
+/**
+ * fwupd_client_install_release:
+ * @self: A #FwupdClient
+ * @device: A #FwupdDevice
+ * @release: A #FwupdRelease
+ * @install_flags: the #FwupdInstallFlags, e.g. %FWUPD_INSTALL_FLAG_ALLOW_REINSTALL
+ * @cancellable: the #GCancellable, or %NULL
+ * @error: the #GError, or %NULL
+ *
+ * Installs a new release on a device, downloading the firmware if required.
+ *
+ * Returns: %TRUE for success
+ *
+ * Since: 1.4.5
+ * Deprecated: 1.5.6
+ **/
+gboolean
+fwupd_client_install_release (FwupdClient *self,
+			      FwupdDevice *device,
+			      FwupdRelease *release,
+			      FwupdInstallFlags install_flags,
+			      GCancellable *cancellable,
+			      GError **error)
+{
+	return fwupd_client_install_release2 (self, device, release, install_flags,
+					      FWUPD_CLIENT_DOWNLOAD_FLAG_NONE,
+					      cancellable, error);
 }
 
 #ifdef HAVE_GIO_UNIX

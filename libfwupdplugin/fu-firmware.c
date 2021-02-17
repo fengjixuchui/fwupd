@@ -24,6 +24,7 @@ typedef struct {
 	FuFirmwareFlags			 flags;
 	GPtrArray			*images;	/* FuFirmwareImage */
 	gchar				*version;
+	guint64				 version_raw;
 } FuFirmwarePrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (FuFirmware, fu_firmware, G_TYPE_OBJECT)
@@ -48,6 +49,10 @@ fu_firmware_flag_to_string (FuFirmwareFlags flag)
 		return "dedupe-id";
 	if (flag == FU_FIRMWARE_FLAG_DEDUPE_IDX)
 		return "dedupe-idx";
+	if (flag == FU_FIRMWARE_FLAG_HAS_CHECKSUM)
+		return "has-checksum";
+	if (flag == FU_FIRMWARE_FLAG_HAS_VID_PID)
+		return "has-vid-pid";
 	return NULL;
 }
 
@@ -68,6 +73,10 @@ fu_firmware_flag_from_string (const gchar *flag)
 		return FU_FIRMWARE_FLAG_DEDUPE_ID;
 	if (g_strcmp0 (flag, "dedupe-idx") == 0)
 		return FU_FIRMWARE_FLAG_DEDUPE_IDX;
+	if (g_strcmp0 (flag, "has-checksum") == 0)
+		return FU_FIRMWARE_FLAG_HAS_CHECKSUM;
+	if (g_strcmp0 (flag, "has-vid-pid") == 0)
+		return FU_FIRMWARE_FLAG_HAS_VID_PID;
 	return FU_FIRMWARE_FLAG_NONE;
 }
 
@@ -140,8 +149,52 @@ fu_firmware_set_version (FuFirmware *self, const gchar *version)
 {
 	FuFirmwarePrivate *priv = GET_PRIVATE (self);
 	g_return_if_fail (FU_IS_FIRMWARE (self));
+
+	/* not changed */
+	if (g_strcmp0 (priv->version, version) == 0)
+		return;
+
 	g_free (priv->version);
 	priv->version = g_strdup (version);
+}
+
+/**
+ * fu_firmware_get_version_raw:
+ * @self: A #FuFirmware
+ *
+ * Gets an raw version that represents the firmware. This is most frequently
+ * used when building firmware with `<version_raw>0x123456</version_raw>` in a
+ * `firmware.builder.xml` file to avoid string splitting and sanity checks.
+ *
+ * Returns: an integer, or %G_MAXUINT64 for invalid
+ *
+ * Since:  1.5.7
+ **/
+guint64
+fu_firmware_get_version_raw (FuFirmware *self)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), G_MAXUINT64);
+	return priv->version_raw;
+}
+
+/**
+ * fu_firmware_set_version_raw:
+ * @self: A #FuFirmware
+ * @version: A raw version, or %G_MAXUINT64 for invalid
+ *
+ * Sets an raw version that represents the firmware.
+ *
+ * This is optional, and is typically only used for debugging.
+ *
+ * Since: 1.5.7
+ **/
+void
+fu_firmware_set_version_raw (FuFirmware *self, guint64 version_raw)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_return_if_fail (FU_IS_FIRMWARE (self));
+	priv->version_raw = version_raw;
 }
 
 /**
@@ -205,6 +258,15 @@ fu_firmware_parse_full (FuFirmware *self,
 	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
 	g_return_val_if_fail (fw != NULL, FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	/* sanity check */
+	if (g_bytes_get_size (fw) == 0) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "invalid firmware as zero sized");
+		return FALSE;
+	}
 
 	/* subclassed */
 	if (klass->tokenize != NULL) {
@@ -294,6 +356,7 @@ fu_firmware_build (FuFirmware *self, XbNode *n, GError **error)
 {
 	FuFirmwareClass *klass = FU_FIRMWARE_GET_CLASS (self);
 	const gchar *tmp;
+	guint64 version_raw;
 	g_autoptr(GPtrArray) xb_images = NULL;
 
 	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
@@ -304,6 +367,9 @@ fu_firmware_build (FuFirmware *self, XbNode *n, GError **error)
 	tmp = xb_node_query_text (n, "version", NULL);
 	if (tmp != NULL)
 		fu_firmware_set_version (self, tmp);
+	version_raw = xb_node_query_text_as_uint (n, "version_raw", NULL);
+	if (version_raw != G_MAXUINT64)
+		fu_firmware_set_version_raw (self, version_raw);
 
 	/* parse images */
 	xb_images = xb_node_query (n, "image", 0, NULL);
@@ -360,6 +426,11 @@ fu_firmware_parse_file (FuFirmware *self, GFile *file, FwupdInstallFlags flags, 
 	gchar *buf = NULL;
 	gsize bufsz = 0;
 	g_autoptr(GBytes) fw = NULL;
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
+	g_return_val_if_fail (G_IS_FILE (file), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	if (!g_file_load_contents (file, NULL, &buf, &bufsz, NULL, error))
 		return FALSE;
 	fw = g_bytes_new_take (buf, bufsz);
@@ -409,6 +480,11 @@ gboolean
 fu_firmware_write_file (FuFirmware *self, GFile *file, GError **error)
 {
 	g_autoptr(GBytes) blob = NULL;
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), FALSE);
+	g_return_val_if_fail (G_IS_FILE (file), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	blob = fu_firmware_write (self, error);
 	if (blob == NULL)
 		return FALSE;
@@ -662,6 +738,51 @@ fu_firmware_get_image_by_idx (FuFirmware *self, guint64 idx, GError **error)
 }
 
 /**
+ * fu_firmware_get_image_by_checksum:
+ * @self: a #FuPlugin
+ * @checksum: checksum string of any format
+ * @error: A #GError, or %NULL
+ *
+ * Gets the firmware image using the image checksum. The checksum type is guessed
+ * based on the length of the input string.
+ *
+ * Returns: (transfer full): a #FuFirmwareImage, or %NULL if the image is not found
+ *
+ * Since: 1.5.5
+ **/
+FuFirmwareImage *
+fu_firmware_get_image_by_checksum (FuFirmware *self,
+				   const gchar *checksum,
+				   GError **error)
+{
+	FuFirmwarePrivate *priv = GET_PRIVATE (self);
+	GChecksumType csum_kind;
+
+	g_return_val_if_fail (FU_IS_FIRMWARE (self), NULL);
+	g_return_val_if_fail (checksum != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+	csum_kind = fwupd_checksum_guess_kind (checksum);
+	for (guint i = 0; i < priv->images->len; i++) {
+		FuFirmwareImage *img = g_ptr_array_index (priv->images, i);
+		g_autofree gchar *checksum_tmp = NULL;
+
+		/* if this expensive then the subclassed FuFirmwareImage can
+		 * cache the result as required */
+		checksum_tmp = fu_firmware_image_get_checksum (img, csum_kind, error);
+		if (checksum_tmp == NULL)
+			return NULL;
+		if (g_strcmp0 (checksum_tmp, checksum) == 0)
+			return g_object_ref (img);
+	}
+	g_set_error (error,
+		     FWUPD_ERROR,
+		     FWUPD_ERROR_NOT_FOUND,
+		     "no image with checksum %s found in firmware", checksum);
+	return NULL;
+}
+
+/**
  * fu_firmware_get_image_by_idx_bytes:
  * @self: a #FuPlugin
  * @idx: image index
@@ -770,6 +891,8 @@ fu_firmware_to_string (FuFirmware *self)
 	}
 	if (priv->version != NULL)
 		fu_common_string_append_kv (str, 0, "Version", priv->version);
+	if (priv->version_raw != 0x0)
+		fu_common_string_append_kx (str, 0, "VersionRaw", priv->version_raw);
 
 	/* vfunc */
 	if (klass->to_string != NULL)
@@ -841,4 +964,69 @@ fu_firmware_new_from_bytes (GBytes *fw)
 	img = fu_firmware_image_new (fw);
 	fu_firmware_add_image (self, img);
 	return self;
+}
+
+/**
+ * fu_firmware_new_from_gtypes:
+ * @fw: a #GBytes
+ * @flags: a #FwupdInstallFlags, e.g. %FWUPD_INSTALL_FLAG_IGNORE_CHECKSUM
+ * @error: (nullable): a #GError or %NULL
+ * @...: An array of #GTypes, ending with %G_TYPE_INVALID
+ *
+ * Tries to parse the firmware with each #GType in order.
+ *
+ * Return value: (transfer full) (nullable): A #FuFirmware, or %NULL
+ *
+ * Since: 1.5.6
+ **/
+FuFirmware *
+fu_firmware_new_from_gtypes (GBytes *fw, FwupdInstallFlags flags, GError **error, ...)
+{
+	va_list args;
+	g_autoptr(GArray) gtypes = g_array_new (FALSE, FALSE, sizeof(GType));
+	g_autoptr(GError) error_all = NULL;
+
+	g_return_val_if_fail (fw != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+	/* create array of GTypes */
+	va_start (args, error);
+	for (guint i = 0; ; i++) {
+		GType gtype = va_arg (args, GType);
+		if (gtype == G_TYPE_INVALID)
+			break;
+		g_array_append_val (gtypes, gtype);
+	}
+	va_end (args);
+
+	/* invalid */
+	if (gtypes->len == 0) {
+		g_set_error_literal (error,
+				     G_IO_ERROR,
+				     G_IO_ERROR_INVALID_ARGUMENT,
+				     "no GTypes specified");
+		return NULL;
+	}
+
+	/* try each GType in turn */
+	for (guint i = 0; i < gtypes->len; i++) {
+		GType gtype = g_array_index (gtypes, GType, i);
+		g_autoptr(FuFirmware) firmware = g_object_new (gtype, NULL);
+		g_autoptr(GError) error_local = NULL;
+		if (!fu_firmware_parse (firmware, fw, flags, &error_local)) {
+			if (error_all == NULL) {
+				g_propagate_error (&error_all,
+						   g_steal_pointer (&error_local));
+			} else {
+				g_prefix_error (&error_all, "%s: ",
+						error_local->message);
+			}
+			continue;
+		}
+		return g_steal_pointer (&firmware);
+	}
+
+	/* failed */
+	g_propagate_error (error, g_steal_pointer (&error_all));
+	return NULL;
 }

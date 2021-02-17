@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2019 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2018 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include "fu-plugin-vfuncs.h"
-#include "fu-hash.h"
 #include "fu-wacom-aes-device.h"
 #include "fu-wacom-emr-device.h"
 #include "fu-wacom-common.h"

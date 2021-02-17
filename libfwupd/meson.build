@@ -29,32 +29,30 @@ install_headers([
 libfwupd_deps = [
     giounix,
     gmodule,
-    libcurl,
     libjcat,
     libjsonglib,
 ]
 
+if get_option('curl')
+  libfwupd_deps += libcurl
+endif
+
 libfwupd_src = [
   'fwupd-client.c',
   'fwupd-client-sync.c',
-  'fwupd-common.c',
-  'fwupd-device.c',
-  'fwupd-enums.c',
-  'fwupd-error.c',
+  'fwupd-common.c',         # fuzzing
+  'fwupd-device.c',         # fuzzing
+  'fwupd-enums.c',          # fuzzing
+  'fwupd-error.c',          # fuzzing
   'fwupd-security-attr.c',
-  'fwupd-release.c',
+  'fwupd-release.c',        # fuzzing
   'fwupd-plugin.c',
   'fwupd-remote.c',
 ]
 
-# force the meson link detection logic to choose the C++ linker
-if get_option('link_language') == 'cpp'
-  libfwupd_src += 'fwupd-fuzz.cpp'
-endif
-
 fwupd_mapfile = 'fwupd.map'
 vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), fwupd_mapfile)
-fwupd = shared_library(
+fwupd = library(
   'fwupd',
   sources : libfwupd_src,
   soversion : libfwupd_lt_current,
@@ -78,7 +76,7 @@ libfwupd_dep = declare_dependency(
 
 pkgg = import('pkgconfig')
 pkgg.generate(
-  libraries : fwupd,
+  fwupd,
   requires : [ 'gio-2.0' ],
   subdirs : 'fwupd-1',
   version : meson.project_version(),
@@ -88,6 +86,12 @@ pkgg.generate(
 )
 
 if get_option('introspection')
+  fwupd_gir_deps = [
+      giounix,
+  ]
+  if get_option('curl')
+    fwupd_gir_deps += libcurl
+  endif
   fwupd_gir = gnome.generate_gir(fwupd,
     sources : [
       'fwupd-client.c',
@@ -124,10 +128,7 @@ if get_option('introspection')
     identifier_prefix : 'Fwupd',
     export_packages : 'fwupd',
     header : 'fwupd.h',
-    dependencies : [
-      giounix,
-      libcurl,
-    ],
+    dependencies : fwupd_gir_deps,
     includes : [
       'Gio-2.0',
       'GObject-2.0',
@@ -180,9 +181,7 @@ if get_option('tests')
       root_incdir,
     ],
     dependencies : [
-      gio,
-      libcurl,
-      libjsonglib,
+      libfwupd_deps,
     ],
     link_with : fwupd,
     c_args : [
@@ -194,6 +193,42 @@ if get_option('tests')
     ],
   )
   test('fwupd-self-test', e, timeout: 60)
+  if gio.version().version_compare ('>= 2.64.0')
+    e = executable(
+      'fwupd-thread-test',
+      sources : [
+        'fwupd-thread-test.c'
+      ],
+      include_directories : [
+        root_incdir,
+      ],
+      dependencies : [
+        libfwupd_deps,
+      ],
+      link_with : fwupd,
+      c_args : [
+        '-DG_LOG_DOMAIN="Fwupd"',
+      ],
+    )
+    test('fwupd-thread-test', e, timeout: 60)
+    e = executable(
+      'fwupd-context-test',
+      sources : [
+        'fwupd-context-test.c'
+      ],
+      include_directories : [
+        root_incdir,
+      ],
+      dependencies : [
+        libfwupd_deps,
+      ],
+      link_with : fwupd,
+      c_args : [
+        '-DG_LOG_DOMAIN="Fwupd"',
+      ],
+    )
+    test('fwupd-context-test', e, timeout: 60)
+  endif
 endif
 
 fwupd_incdir = include_directories('.')

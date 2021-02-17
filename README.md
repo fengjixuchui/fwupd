@@ -2,6 +2,7 @@ fwupd
 =====
 [![Build Status](https://travis-ci.org/fwupd/fwupd.png?branch=master)](https://travis-ci.org/fwupd/fwupd)
 [![Coverity Scan Build Status](https://scan.coverity.com/projects/10744/badge.svg)](https://scan.coverity.com/projects/10744)
+[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/fwupd.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=1&q=proj:fwupd)
 
 This project aims to make updating firmware on Linux automatic, safe and reliable.
 
@@ -133,9 +134,10 @@ Fuzzing
 
 There are several automated fuzzing tests in fwupd. These take some time to run:
 
-    CC=hfuzz-clang meson --default-library=static -Dtmpdir=/tmp -Dsystemd_root_prefix=/tmp ../
+    CC=hfuzz-clang meson --default-library=static \
+        -Dudevdir=/tmp -Dsystemd_root_prefix=/tmp \
+        -Dplugin_redfish=false -Dcurl=false \
+        -Dintrospection=false ../
     ninja install
     ninja fuzz-firmware
-    ninja fuzz-smbios
-    ninja fuzz-efidbx
     ninja fuzz-tpm-eventlog

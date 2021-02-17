@@ -16,9 +16,8 @@ meson .. \
     --bindir=$target \
     -Dbuild=standalone \
     -Dpolkit=false \
-    -Dplugin_coreboot=false \
     -Dplugin_flashrom=false \
-    -Dplugin_uefi=false \
+    -Dplugin_uefi_capsule=false \
     -Dplugin_redfish=false \
     -Dplugin_altos=false \
     -Dplugin_dell=false \
@@ -30,7 +29,7 @@ meson .. \
     -Dplugin_amt=false \
     -Dintrospection=false \
     -Dplugin_thunderbolt=false \
-    -Dplugin_synaptics=false \
+    -Dplugin_synaptics_mst=false \
     -Dman=false \
     -Dsoup_session_compat=false \
     -Dgcab:introspection=false \

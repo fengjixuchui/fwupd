@@ -6,7 +6,6 @@
 
 #include "config.h"
 
-#include "fu-hash.h"
 #include "fu-plugin-vfuncs.h"
 
 #include "fu-tpm-eventlog-device.h"
@@ -22,7 +21,7 @@ void
 fu_plugin_init (FuPlugin *plugin)
 {
 	fu_plugin_alloc_data (plugin, sizeof (FuPluginData));
-	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_BEFORE, "uefi");
+	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_BEFORE, "uefi_capsule");
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_RUN_AFTER, "tpm");
 	fu_plugin_set_build_hash (plugin, FU_BUILD_HASH);
 }
@@ -67,6 +66,18 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 	for (guint i = 0; i < data->pcr0s->len; i++) {
 		const gchar *csum = g_ptr_array_index (data->pcr0s, i);
 		fu_device_add_checksum (FU_DEVICE (dev), csum);
+	}
+	for (guint i = 0; i < data->pcr0s->len; i++) {
+		const gchar *csum = g_ptr_array_index (data->pcr0s, i);
+		GChecksumType csum_type = fwupd_checksum_guess_kind (csum);
+		if (csum_type == G_CHECKSUM_SHA1) {
+			fu_plugin_add_report_metadata (plugin, "Pcr0_SHA1", csum);
+			continue;
+		}
+		if (csum_type == G_CHECKSUM_SHA256) {
+			fu_plugin_add_report_metadata (plugin, "Pcr0_SHA256", csum);
+			continue;
+		}
 	}
 
 	/* add optional report metadata */
@@ -118,7 +129,7 @@ void
 fu_plugin_device_registered (FuPlugin *plugin, FuDevice *device)
 {
 	/* only care about UEFI devices from ESRT */
-	if (g_strcmp0 (fu_device_get_plugin (device), "uefi") == 0) {
+	if (g_strcmp0 (fu_device_get_plugin (device), "uefi_capsule") == 0) {
 		fu_plugin_device_registered_uefi (plugin, device);
 		return;
 	}

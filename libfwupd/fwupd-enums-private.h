@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016-2020 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2016 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -54,6 +54,7 @@ G_BEGIN_DECLS
 #define FWUPD_RESULT_KEY_UPDATE_ERROR		"UpdateError"	/* s */
 #define FWUPD_RESULT_KEY_UPDATE_STATE		"UpdateState"	/* u */
 #define FWUPD_RESULT_KEY_URI			"Uri"		/* s */
+#define FWUPD_RESULT_KEY_LOCATIONS		"Locations"	/* as */
 #define FWUPD_RESULT_KEY_VENDOR_ID		"VendorId"	/* s */
 #define FWUPD_RESULT_KEY_VENDOR			"Vendor"	/* s */
 #define FWUPD_RESULT_KEY_VENDOR			"Vendor"	/* s */

@@ -11,11 +11,11 @@
 #include "fu-hailuck-bl-device.h"
 #include "fu-hailuck-kbd-firmware.h"
 
-struct _FuHaiLuckBlDevice {
+struct _FuHailuckBlDevice {
 	FuHidDevice		 parent_instance;
 };
 
-G_DEFINE_TYPE (FuHaiLuckBlDevice, fu_hailuck_bl_device, FU_TYPE_HID_DEVICE)
+G_DEFINE_TYPE (FuHailuckBlDevice, fu_hailuck_bl_device, FU_TYPE_HID_DEVICE)
 
 static gboolean
 fu_hailuck_bl_device_attach (FuDevice *device, GError **error)
@@ -51,7 +51,7 @@ fu_hailuck_bl_device_probe (FuUsbDevice *device, GError **error)
 }
 
 static gboolean
-fu_hailuck_bl_device_read_block_start (FuHaiLuckBlDevice *self,
+fu_hailuck_bl_device_read_block_start (FuHailuckBlDevice *self,
 					guint32 length,
 					GError **error)
 {
@@ -66,7 +66,7 @@ fu_hailuck_bl_device_read_block_start (FuHaiLuckBlDevice *self,
 }
 
 static gboolean
-fu_hailuck_bl_device_read_block (FuHaiLuckBlDevice *self,
+fu_hailuck_bl_device_read_block (FuHailuckBlDevice *self,
 				  guint8 *data, gsize data_sz,
 				  GError **error)
 {
@@ -93,7 +93,7 @@ fu_hailuck_bl_device_read_block (FuHaiLuckBlDevice *self,
 static GBytes *
 fu_hailuck_bl_device_dump_firmware (FuDevice *device, GError **error)
 {
-	FuHaiLuckBlDevice *self = FU_HAILUCK_BL_DEVICE (device);
+	FuHailuckBlDevice *self = FU_HAILUCK_BL_DEVICE (device);
 	gsize fwsz = fu_device_get_firmware_size_max (device);
 	g_autoptr(GByteArray) fwbuf = g_byte_array_new ();
 	g_autoptr(GPtrArray) chunks = NULL;
@@ -105,13 +105,13 @@ fu_hailuck_bl_device_dump_firmware (FuDevice *device, GError **error)
 
 	/* recieve data back */
 	fu_byte_array_set_size (fwbuf, fwsz);
-	chunks = fu_chunk_array_new (fwbuf->data, fwbuf->len, 0x0, 0x0, 2048);
+	chunks = fu_chunk_array_mutable_new (fwbuf->data, fwbuf->len, 0x0, 0x0, 2048);
 	for (guint i = 0; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks, i);
 		if (!fu_hailuck_bl_device_read_block (self,
-						       (guint8 *) chk->data,
-						       chk->data_sz,
-						       error))
+						      fu_chunk_get_data_out (chk),
+						      fu_chunk_get_data_sz (chk),
+						      error))
 			return NULL;
 		fu_device_set_progress_full (device, i, chunks->len - 1);
 	}
@@ -121,7 +121,7 @@ fu_hailuck_bl_device_dump_firmware (FuDevice *device, GError **error)
 }
 
 static gboolean
-fu_hailuck_bl_device_erase (FuHaiLuckBlDevice *self, GError **error)
+fu_hailuck_bl_device_erase (FuHailuckBlDevice *self, GError **error)
 {
 	guint8 buf[6] = {
 		FU_HAILUCK_REPORT_ID_SHORT,
@@ -136,7 +136,7 @@ fu_hailuck_bl_device_erase (FuHaiLuckBlDevice *self, GError **error)
 }
 
 static gboolean
-fu_hailuck_bl_device_write_block_start (FuHaiLuckBlDevice *self,
+fu_hailuck_bl_device_write_block_start (FuHailuckBlDevice *self,
 					 guint32 length, GError **error)
 {
 	guint8 buf[6] = {
@@ -150,7 +150,7 @@ fu_hailuck_bl_device_write_block_start (FuHaiLuckBlDevice *self,
 }
 
 static gboolean
-fu_hailuck_bl_device_write_block (FuHaiLuckBlDevice *self,
+fu_hailuck_bl_device_write_block (FuHailuckBlDevice *self,
 				   const guint8 *data, gsize data_sz,
 				   GError **error)
 {
@@ -192,7 +192,7 @@ fu_hailuck_bl_device_write_firmware (FuDevice *device,
 				      FwupdInstallFlags flags,
 				      GError **error)
 {
-	FuHaiLuckBlDevice *self = FU_HAILUCK_BL_DEVICE (device);
+	FuHailuckBlDevice *self = FU_HAILUCK_BL_DEVICE (device);
 	FuChunk *chk0;
 	g_autoptr(GBytes) fw = NULL;
 	g_autoptr(GBytes) fw_new = NULL;
@@ -219,15 +219,25 @@ fu_hailuck_bl_device_write_firmware (FuDevice *device,
 
 	/* intentionally corrupt first chunk so that CRC fails */
 	chk0 = g_ptr_array_index (chunks, 0);
-	chk0_data = g_memdup (chk0->data, chk0->data_sz);
+	chk0_data = fu_memdup_safe (fu_chunk_get_data (chk0),
+				    fu_chunk_get_data_sz (chk0),
+				    error);
+	if (chk0_data == NULL)
+		return FALSE;
 	chk0_data[0] = 0x00;
-	if (!fu_hailuck_bl_device_write_block (self, chk0_data, chk0->data_sz, error))
+	if (!fu_hailuck_bl_device_write_block (self,
+					       chk0_data,
+					       fu_chunk_get_data_sz (chk0),
+					       error))
 		return FALSE;
 
 	/* send the rest of the chunks */
 	for (guint i = 1; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks, i);
-		if (!fu_hailuck_bl_device_write_block (self, chk->data, chk->data_sz, error))
+		if (!fu_hailuck_bl_device_write_block (self,
+						       fu_chunk_get_data (chk),
+						       fu_chunk_get_data_sz (chk),
+						       error))
 			return FALSE;
 		fu_device_set_progress_full (device, i, chunks->len);
 	}
@@ -235,7 +245,10 @@ fu_hailuck_bl_device_write_firmware (FuDevice *device,
 	/* retry write of first block */
 	if (!fu_hailuck_bl_device_write_block_start (self, g_bytes_get_size (fw), error))
 		return FALSE;
-	if (!fu_hailuck_bl_device_write_block (self, chk0->data, chk0->data_sz, error))
+	if (!fu_hailuck_bl_device_write_block (self,
+					       fu_chunk_get_data (chk0),
+					       fu_chunk_get_data_sz (chk0),
+					       error))
 		return FALSE;
 	fu_device_set_progress_full (device, chunks->len, chunks->len);
 
@@ -245,7 +258,7 @@ fu_hailuck_bl_device_write_firmware (FuDevice *device,
 }
 
 static void
-fu_hailuck_bl_device_init (FuHaiLuckBlDevice *self)
+fu_hailuck_bl_device_init (FuHailuckBlDevice *self)
 {
 	fu_device_set_firmware_size (FU_DEVICE (self), 0x4000);
 	fu_device_set_protocol (FU_DEVICE (self), "com.hailuck.kbd");
@@ -260,7 +273,7 @@ fu_hailuck_bl_device_init (FuHaiLuckBlDevice *self)
 }
 
 static void
-fu_hailuck_bl_device_class_init (FuHaiLuckBlDeviceClass *klass)
+fu_hailuck_bl_device_class_init (FuHailuckBlDeviceClass *klass)
 {
 	FuDeviceClass *klass_device = FU_DEVICE_CLASS (klass);
 	FuUsbDeviceClass *klass_usb_device = FU_USB_DEVICE_CLASS (klass);

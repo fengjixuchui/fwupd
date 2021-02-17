@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2017 Richard Hughes <richard@hughsie.com>
+ * Copyright (C) 2015 Richard Hughes <richard@hughsie.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
@@ -14,10 +14,9 @@
 #include "fu-plugin-private.h"
 #include "fu-plugin-dell.h"
 #include "fu-plugin-vfuncs.h"
-#include "fu-hash.h"
 
 typedef struct {
-	FuPlugin		*plugin_uefi;
+	FuPlugin		*plugin_uefi_capsule;
 	FuPlugin		*plugin_dell;
 } FuTest;
 
@@ -60,10 +59,10 @@ fu_engine_plugin_device_register_cb (FuPlugin *plugin_dell,
 				     FuDevice *device,
 				     gpointer user_data)
 {
-	FuPlugin *plugin_uefi = FU_PLUGIN (user_data);
+	FuPlugin *plugin_uefi_capsule = FU_PLUGIN (user_data);
 	g_autofree gchar *dbg = fu_device_to_string (device);
 	g_debug ("registering device: %s", dbg);
-	fu_plugin_runner_device_register (plugin_uefi, device);
+	fu_plugin_runner_device_register (plugin_uefi_capsule, device);
 }
 
 static void
@@ -94,14 +93,14 @@ fu_plugin_dell_tpm_func (gconstpointer user_data)
 
 	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	added_id =
-	g_signal_connect (self->plugin_uefi, "device-added",
+	g_signal_connect (self->plugin_uefi_capsule, "device-added",
 			  G_CALLBACK (_plugin_device_added_cb),
 			  devices);
 
 	register_id =
 	g_signal_connect (self->plugin_dell, "device-register",
 			  G_CALLBACK (fu_engine_plugin_device_register_cb),
-			  self->plugin_uefi);
+			  self->plugin_uefi_capsule);
 	ret = fu_plugin_runner_coldplug (self->plugin_dell, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
@@ -144,7 +143,7 @@ fu_plugin_dell_tpm_func (gconstpointer user_data)
 	g_assert_false (fu_device_has_flag (device_v12, FWUPD_DEVICE_FLAG_UPDATABLE));
 
 	/* try to unlock 2.0 */
-	ret = fu_plugin_runner_unlock (self->plugin_uefi, device_v20, &error);
+	ret = fu_plugin_runner_unlock (self->plugin_uefi_capsule, device_v20, &error);
 	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
 	g_assert_false (ret);
 	g_clear_error (&error);
@@ -175,7 +174,7 @@ fu_plugin_dell_tpm_func (gconstpointer user_data)
 	/* try to unlock 2.0 */
 	device_v20 = _find_device_by_name (devices, "TPM 2.0");
 	g_assert_nonnull (device_v20);
-	ret = fu_plugin_runner_unlock (self->plugin_uefi, device_v20, &error);
+	ret = fu_plugin_runner_unlock (self->plugin_uefi_capsule, device_v20, &error);
 	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
 	g_assert_false (ret);
 	g_clear_error (&error);
@@ -207,7 +206,7 @@ fu_plugin_dell_tpm_func (gconstpointer user_data)
 	g_assert_false (fu_device_has_flag (device_v20, FWUPD_DEVICE_FLAG_UPDATABLE));
 
 	/* try to unlock 2.0 */
-	ret = fu_plugin_runner_unlock (self->plugin_uefi, device_v20, &error);
+	ret = fu_plugin_runner_unlock (self->plugin_uefi_capsule, device_v20, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
 
@@ -242,20 +241,20 @@ fu_plugin_dell_tpm_func (gconstpointer user_data)
 	g_assert_false (fu_device_has_flag (device_v12, FWUPD_DEVICE_FLAG_UPDATABLE));
 
 	/* With one flash left we need an override */
-	ret = fu_plugin_runner_update (self->plugin_uefi, device_v20, blob_fw,
+	ret = fu_plugin_runner_update (self->plugin_uefi_capsule, device_v20, blob_fw,
 				       FWUPD_INSTALL_FLAG_NONE, &error);
 	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
 	g_assert_false (ret);
 	g_clear_error (&error);
 
 	/* test override */
-	ret = fu_plugin_runner_update (self->plugin_uefi, device_v20, blob_fw,
+	ret = fu_plugin_runner_update (self->plugin_uefi_capsule, device_v20, blob_fw,
 				       FWUPD_INSTALL_FLAG_FORCE, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
 
 	/* all */
-	g_signal_handler_disconnect (self->plugin_uefi, added_id);
+	g_signal_handler_disconnect (self->plugin_uefi_capsule, added_id);
 	g_signal_handler_disconnect (self->plugin_dell, register_id);
 }
 
@@ -269,24 +268,27 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 	DOCK_INFO *dock_info;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) devices = NULL;
+	g_autoptr(FuUsbDevice) fake_usb_device = fu_usb_device_new (NULL);
 	gulong added_id;
 	gulong register_id;
 
 	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	added_id =
-	g_signal_connect (self->plugin_uefi, "device-added",
+	g_signal_connect (self->plugin_uefi_capsule, "device-added",
 			  G_CALLBACK (_plugin_device_added_cb),
 			  devices);
 	register_id =
 	g_signal_connect (self->plugin_dell, "device-register",
 			  G_CALLBACK (fu_engine_plugin_device_register_cb),
-			  self->plugin_uefi);
+			  self->plugin_uefi_capsule);
 
 	/* make sure bad device doesn't trigger this */
 	fu_plugin_dell_inject_fake_data (self->plugin_dell,
 					   (guint32 *) &out,
 					   0x1234, 0x4321, NULL, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, &error);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      &error);
 	g_assert_false (ret);
 	g_clear_error (&error);
 	g_assert_cmpint (devices->len, ==, 0);
@@ -298,7 +300,9 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					   (guint32 *) &out,
 					   DOCK_NIC_VID, DOCK_NIC_PID,
 					   NULL, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, &error);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      &error);
 	g_assert_true (ret);
 	g_clear_error (&error);
 	g_assert_cmpint (devices->len, ==, 0);
@@ -332,7 +336,9 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					   (guint32 *) &out,
 					   DOCK_NIC_VID, DOCK_NIC_PID,
 					   buf.buf, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, NULL);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      NULL);
 	g_assert (ret);
 	g_assert_cmpint (devices->len, ==, 4);
 	g_ptr_array_set_size (devices, 0);
@@ -367,7 +373,9 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					   (guint32 *) &out,
 					   DOCK_NIC_VID, DOCK_NIC_PID,
 					   buf.buf, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, NULL);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      NULL);
 	g_assert (ret);
 	g_assert_cmpint (devices->len, ==, 3);
 	g_ptr_array_set_size (devices, 0);
@@ -399,7 +407,9 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					   (guint32 *) &out,
 					   DOCK_NIC_VID, DOCK_NIC_PID,
 					   buf.buf, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, &error);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      &error);
 	g_assert (ret);
 	g_assert_no_error (error);
 	g_assert_cmpint (devices->len, ==, 3);
@@ -432,7 +442,9 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					 (guint32 *) &out,
 					 DOCK_NIC_VID, DOCK_NIC_PID,
 					 buf.buf, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, &error);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      &error);
 	g_assert (ret);
 	g_assert_no_error (error);
 	g_assert_cmpint (devices->len, ==, 2);
@@ -459,13 +471,15 @@ fu_plugin_dell_dock_func (gconstpointer user_data)
 					 (guint32 *) &out,
 					 DOCK_NIC_VID, DOCK_NIC_PID,
 					 buf.buf, FALSE);
-	ret = fu_plugin_usb_device_added (self->plugin_dell, NULL, &error);
+	ret = fu_plugin_backend_device_added (self->plugin_dell,
+					      FU_DEVICE (fake_usb_device),
+					      &error);
 	g_assert_false (ret);
 	g_assert_cmpint (devices->len, ==, 0);
 	g_free (buf.record);
 
 	/* all */
-	g_signal_handler_disconnect (self->plugin_uefi, added_id);
+	g_signal_handler_disconnect (self->plugin_uefi_capsule, added_id);
 	g_signal_handler_disconnect (self->plugin_dell, register_id);
 }
 
@@ -477,14 +491,14 @@ fu_test_self_init (FuTest *self)
 	g_autofree gchar *pluginfn_uefi = NULL;
 	g_autofree gchar *pluginfn_dell = NULL;
 
-	self->plugin_uefi = fu_plugin_new ();
-	pluginfn_uefi = g_build_filename (PLUGINBUILDDIR, "..", "uefi",
-					  "libfu_plugin_uefi." G_MODULE_SUFFIX,
+	self->plugin_uefi_capsule = fu_plugin_new ();
+	pluginfn_uefi = g_build_filename (PLUGINBUILDDIR, "..", "uefi-capsule",
+					  "libfu_plugin_uefi_capsule." G_MODULE_SUFFIX,
 					  NULL);
-	ret = fu_plugin_open (self->plugin_uefi, pluginfn_uefi, &error);
+	ret = fu_plugin_open (self->plugin_uefi_capsule, pluginfn_uefi, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
-	ret = fu_plugin_runner_startup (self->plugin_uefi, &error);
+	ret = fu_plugin_runner_startup (self->plugin_uefi_capsule, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
 
@@ -503,8 +517,8 @@ fu_test_self_init (FuTest *self)
 static void
 fu_test_self_free (FuTest *self)
 {
-	if (self->plugin_uefi != NULL)
-		g_object_unref (self->plugin_uefi);
+	if (self->plugin_uefi_capsule != NULL)
+		g_object_unref (self->plugin_uefi_capsule);
 	if (self->plugin_dell != NULL)
 		g_object_unref (self->plugin_dell);
 	g_free (self);

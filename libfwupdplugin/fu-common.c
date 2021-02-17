@@ -19,16 +19,23 @@
 #include <shlwapi.h>
 #endif
 
+#ifdef _WIN32
+#include <sysinfoapi.h>
+#endif
+
 #ifdef HAVE_CPUID_H
 #include <cpuid.h>
 #endif
 
+#ifdef HAVE_LIBARCHIVE
 #include <archive_entry.h>
 #include <archive.h>
+#endif
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "fwupd-error.h"
 
@@ -67,6 +74,9 @@ fu_common_rmtree (const gchar *directory, GError **error)
 {
 	const gchar *filename;
 	g_autoptr(GDir) dir = NULL;
+
+	g_return_val_if_fail (directory != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* try to open */
 	g_debug ("removing %s", directory);
@@ -143,6 +153,10 @@ GPtrArray *
 fu_common_get_files_recursive (const gchar *path, GError **error)
 {
 	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func (g_free);
+
+	g_return_val_if_fail (path != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
 	if (!fu_common_get_file_list_internal (files, path, error))
 		return NULL;
 	return g_steal_pointer (&files);
@@ -162,6 +176,9 @@ gboolean
 fu_common_mkdir_parent (const gchar *filename, GError **error)
 {
 	g_autofree gchar *parent = NULL;
+
+	g_return_val_if_fail (filename != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	parent = g_path_get_dirname (filename);
 	if (!g_file_test (parent, G_FILE_TEST_IS_DIR))
@@ -198,6 +215,10 @@ fu_common_set_contents_bytes (const gchar *filename, GBytes *bytes, GError **err
 	g_autoptr(GFile) file = NULL;
 	g_autoptr(GFile) file_parent = NULL;
 
+	g_return_val_if_fail (filename != NULL, FALSE);
+	g_return_val_if_fail (bytes != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	file = g_file_new_for_path (filename);
 	file_parent = g_file_get_parent (file);
 	if (!g_file_query_exists (file_parent, NULL)) {
@@ -225,6 +246,10 @@ fu_common_get_contents_bytes (const gchar *filename, GError **error)
 {
 	gchar *data = NULL;
 	gsize len = 0;
+
+	g_return_val_if_fail (filename != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
 	if (!g_file_get_contents (filename, &data, &len, error))
 		return NULL;
 	g_debug ("reading %s with %" G_GSIZE_FORMAT " bytes", filename, len);
@@ -249,7 +274,8 @@ GBytes *
 fu_common_get_contents_fd (gint fd, gsize count, GError **error)
 {
 #ifdef HAVE_GIO_UNIX
-	g_autoptr(GBytes) blob = NULL;
+	guint8 tmp[0x8000] = { 0x0 };
+	g_autoptr(GByteArray) buf = g_byte_array_new ();
 	g_autoptr(GError) error_local = NULL;
 	g_autoptr(GInputStream) stream = NULL;
 
@@ -267,15 +293,31 @@ fu_common_get_contents_fd (gint fd, gsize count, GError **error)
 
 	/* read the entire fd to a data blob */
 	stream = g_unix_input_stream_new (fd, TRUE);
-	blob = g_input_stream_read_bytes (stream, count, NULL, &error_local);
-	if (blob == NULL) {
-		g_set_error_literal (error,
+
+	/* read from stream in 32kB chunks */
+	while (TRUE) {
+		gssize sz;
+		sz = g_input_stream_read (stream, tmp, sizeof(tmp), NULL, &error_local);
+		if (sz == 0)
+			break;
+		if (sz < 0) {
+			g_set_error_literal (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_INVALID_FILE,
+					     error_local->message);
+			return NULL;
+		}
+		g_byte_array_append (buf, tmp, sz);
+		if (buf->len > count) {
+			g_set_error (error,
 				     FWUPD_ERROR,
 				     FWUPD_ERROR_INVALID_FILE,
-				     error_local->message);
-		return NULL;
+				     "cannot read from fd: 0x%x > 0x%x",
+				     buf->len, (guint) count);
+			return NULL;
+		}
 	}
-	return g_steal_pointer (&blob);
+	return g_byte_array_free_to_bytes (g_steal_pointer (&buf));
 #else
 	g_set_error_literal (error,
 			     FWUPD_ERROR,
@@ -285,6 +327,7 @@ fu_common_get_contents_fd (gint fd, gsize count, GError **error)
 #endif
 }
 
+#ifdef HAVE_LIBARCHIVE
 static gboolean
 fu_common_extract_archive_entry (struct archive_entry *entry, const gchar *dir)
 {
@@ -301,6 +344,7 @@ fu_common_extract_archive_entry (struct archive_entry *entry, const gchar *dir)
 	archive_entry_update_pathname_utf8 (entry, buf);
 	return TRUE;
 }
+#endif
 
 /**
  * fu_common_extract_archive:
@@ -317,10 +361,15 @@ fu_common_extract_archive_entry (struct archive_entry *entry, const gchar *dir)
 gboolean
 fu_common_extract_archive (GBytes *blob, const gchar *dir, GError **error)
 {
+#ifdef HAVE_LIBARCHIVE
 	gboolean ret = TRUE;
 	int r;
 	struct archive *arch = NULL;
 	struct archive_entry *entry;
+
+	g_return_val_if_fail (blob != NULL, FALSE);
+	g_return_val_if_fail (dir != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* decompress anything matching either glob */
 	g_debug ("decompressing into %s", dir);
@@ -375,6 +424,13 @@ out:
 		archive_read_free (arch);
 	}
 	return ret;
+#else
+	g_set_error_literal (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "missing libarchive support");
+	return FALSE;
+#endif
 }
 
 static void
@@ -701,6 +757,10 @@ fu_common_spawn_sync (const gchar * const * argv,
 	g_autoptr(GSubprocess) subprocess = NULL;
 	g_autofree gchar *argv_str = NULL;
 	gulong cancellable_id = 0;
+
+	g_return_val_if_fail (argv != NULL, FALSE);
+	g_return_val_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable), FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* create subprocess */
 	argv_str = g_strjoinv (" ", (gchar **) argv);
@@ -1652,6 +1712,7 @@ fu_common_bytes_new_offset (GBytes *bytes,
 			    GError **error)
 {
 	g_return_val_if_fail (bytes != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
 	/* sanity check */
 	if (offset + length > g_bytes_get_size (bytes)) {
@@ -1685,6 +1746,7 @@ fu_common_realpath (const gchar *filename, GError **error)
 	char full_tmp[PATH_MAX];
 
 	g_return_val_if_fail (filename != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
 #ifdef HAVE_REALPATH
 	if (realpath (filename, full_tmp) == NULL) {
@@ -1759,8 +1821,14 @@ GPtrArray *
 fu_common_filename_glob (const gchar *directory, const gchar *pattern, GError **error)
 {
 	const gchar *basename;
-	g_autoptr(GDir) dir = g_dir_open (directory, 0, error);
+	g_autoptr(GDir) dir = NULL;
 	g_autoptr(GPtrArray) files = g_ptr_array_new_with_free_func (g_free);
+
+	g_return_val_if_fail (directory != NULL, NULL);
+	g_return_val_if_fail (pattern != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+	dir = g_dir_open (directory, 0, error);
 	if (dir == NULL)
 		return NULL;
 	while ((basename = g_dir_read_name (dir)) != NULL) {
@@ -1806,6 +1874,75 @@ fu_common_strnsplit (const gchar *str, gsize sz,
 }
 
 /**
+ * fu_common_strsafe:
+ * @str: (nullable): a string to make safe for printing
+ * @maxsz: maximum size of returned string
+ *
+ * Converts a string into something that can be safely printed.
+ *
+ * Return value: (transfer full): safe string, or %NULL if there was nothing valid
+ *
+ * Since: 1.5.5
+ **/
+gchar *
+fu_common_strsafe (const gchar *str, gsize maxsz)
+{
+	gboolean valid = FALSE;
+	g_autoptr(GString) tmp = NULL;
+
+	/* sanity check */
+	if (str == NULL || maxsz == 0)
+		return NULL;
+
+	/* replace non-printable chars with '.' */
+	tmp = g_string_sized_new (maxsz);
+	for (gsize i = 0; i < maxsz && str[i] != '\0'; i++) {
+		if (!g_ascii_isprint (str[i])) {
+			g_string_append_c (tmp, '.');
+			continue;
+		}
+		g_string_append_c (tmp, str[i]);
+		if (!g_ascii_isspace (str[i]))
+			valid = TRUE;
+	}
+
+	/* if just junk, don't return 'all dots' */
+	if (tmp->len == 0 || !valid)
+		return NULL;
+	return g_string_free (g_steal_pointer (&tmp), FALSE);
+}
+
+
+/**
+ * fu_common_strjoin_array:
+ * @separator: (nullable): string to insert between each of the strings, or %NULL
+ * @array: (element-type utf8): A #GPtrArray
+ *
+ * Joins an array of strings together to form one long string, with the optional
+ * separator inserted between each of them.
+ *
+ * If @array has no items, the return value will be an empty string.
+ * If @array contains a single item, separator will not appear in the resulting
+ * string.
+ *
+ * Returns: a string
+ *
+ * Since: 1.5.6
+ **/
+gchar *
+fu_common_strjoin_array (const gchar *separator, GPtrArray *array)
+{
+	g_autofree const gchar **strv = NULL;
+
+	g_return_val_if_fail (array != NULL, NULL);
+
+	strv = g_new0 (const gchar *, array->len + 1);
+	for (guint i = 0; i < array->len; i++)
+		strv[i] = g_ptr_array_index (array, i);
+	return g_strjoinv (separator, (gchar **) strv);
+}
+
+/**
  * fu_memcpy_safe:
  * @dst: destination buffer
  * @dst_sz: maximum size of @dst, typically `sizeof(dst)`
@@ -1836,6 +1973,10 @@ fu_memcpy_safe (guint8 *dst, gsize dst_sz, gsize dst_offset,
 		const guint8 *src, gsize src_sz, gsize src_offset,
 		gsize n, GError **error)
 {
+	g_return_val_if_fail (dst != NULL, FALSE);
+	g_return_val_if_fail (src != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	if (n == 0)
 		return TRUE;
 
@@ -1878,6 +2019,45 @@ fu_memcpy_safe (guint8 *dst, gsize dst_sz, gsize dst_offset,
 }
 
 /**
+ * fu_memdup_safe:
+ * @src: source buffer
+ * @n: number of bytes to copy from @src
+ * @error: A #GError or %NULL
+ *
+ * Duplicates some memory using memdup in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * NOTE: This function intentionally limits allocation size to 1GB.
+ *
+ * Return value: (transfer full): block of allocated memory, or %NULL for an error.
+ *
+ * Since: 1.5.6
+ **/
+guint8 *
+fu_memdup_safe (const guint8 *src, gsize n, GError **error)
+{
+	/* sanity check */
+	if (n > 0x40000000) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_SUPPORTED,
+			     "cannot allocate %uGB of memory",
+			     (guint) (n / 0x40000000));
+		return NULL;
+	}
+
+#if GLIB_CHECK_VERSION(2,67,3)
+	/* linear block of memory */
+	return g_memdup2 (src, n);
+#else
+	return g_memdup (src, (guint) n);
+#endif
+}
+
+/**
  * fu_common_read_uint8_safe:
  * @buf: source buffer
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
@@ -1903,6 +2083,10 @@ fu_common_read_uint8_safe (const guint8 *buf,
 			   GError **error)
 {
 	guint8 tmp;
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	if (!fu_memcpy_safe (&tmp, sizeof(tmp), 0x0,	/* dst */
 			     buf, bufsz, offset,	/* src */
 			     sizeof(tmp), error))
@@ -1940,6 +2124,10 @@ fu_common_read_uint16_safe (const guint8 *buf,
 			    GError **error)
 {
 	guint8 dst[2] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	if (!fu_memcpy_safe (dst, sizeof(dst), 0x0,	/* dst */
 			     buf, bufsz, offset,	/* src */
 			     sizeof(dst), error))
@@ -1977,6 +2165,10 @@ fu_common_read_uint32_safe (const guint8 *buf,
 			    GError **error)
 {
 	guint8 dst[4] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	if (!fu_memcpy_safe (dst, sizeof(dst), 0x0,	/* dst */
 			     buf, bufsz, offset,	/* src */
 			     sizeof(dst), error))
@@ -2118,6 +2310,8 @@ fu_common_cpuid (guint32 leaf,
 	guint ecx_tmp = 0;
 	guint edx_tmp = 0;
 
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
 	/* get vendor */
 	__get_cpuid_count (leaf, 0x0, &eax_tmp, &ebx_tmp, &ecx_tmp, &edx_tmp);
 	if (eax != NULL)
@@ -2144,26 +2338,49 @@ fu_common_cpuid (guint32 leaf,
  * Uses CPUID to discover the CPU vendor and check if it is Intel.
  *
  * Return value: %TRUE if the vendor was Intel.
+ * Deprecated: 1.5.5: Use fu_common_get_cpu_vendor() instead.
  *
  * Since: 1.5.0
  **/
 gboolean
 fu_common_is_cpu_intel (void)
 {
+	return fu_common_get_cpu_vendor () == FU_CPU_VENDOR_INTEL;
+}
+
+/**
+ * fu_common_get_cpu_vendor:
+ *
+ * Uses CPUID to discover the CPU vendor.
+ *
+ * Return value: a #FuCpuVendor, e.g. %FU_CPU_VENDOR_AMD if the vendor was AMD.
+ *
+ * Since: 1.5.5
+ **/
+FuCpuVendor
+fu_common_get_cpu_vendor (void)
+{
+#ifdef HAVE_CPUID_H
 	guint ebx = 0;
 	guint ecx = 0;
 	guint edx = 0;
 
-	if (!fu_common_cpuid (0x0, NULL, &ebx, &ecx, &edx, NULL))
-		return FALSE;
-#ifdef HAVE_CPUID_H
-	if (ebx == signature_INTEL_ebx &&
-	    edx == signature_INTEL_edx &&
-	    ecx == signature_INTEL_ecx) {
-		return TRUE;
+	if (fu_common_cpuid (0x0, NULL, &ebx, &ecx, &edx, NULL)) {
+		if (ebx == signature_INTEL_ebx &&
+		    edx == signature_INTEL_edx &&
+		    ecx == signature_INTEL_ecx) {
+			return FU_CPU_VENDOR_INTEL;
+		}
+		if (ebx == signature_AMD_ebx &&
+		    edx == signature_AMD_edx &&
+		    ecx == signature_AMD_ecx) {
+			return FU_CPU_VENDOR_AMD;
+		}
 	}
 #endif
-	return FALSE;
+
+	/* failed */
+	return FU_CPU_VENDOR_UNKNOWN;
 }
 
 /**
@@ -2198,6 +2415,28 @@ fu_common_is_live_media (void)
 			return TRUE;
 	}
 	return FALSE;
+}
+
+/**
+ * fu_common_get_memory_size:
+ *
+ * Returns the size of physical memory.
+ *
+ * Returns: bytes
+ *
+ * Since: 1.5.6
+ **/
+guint64
+fu_common_get_memory_size (void)
+{
+#ifdef _WIN32
+	MEMORYSTATUSEX status;
+	status.dwLength = sizeof(status);
+	GlobalMemoryStatusEx (&status);
+	return (guint64) status.ullTotalPhys;
+#else
+	return sysconf (_SC_PHYS_PAGES) * sysconf (_SC_PAGE_SIZE);
+#endif
 }
 
 static GPtrArray *
@@ -2278,6 +2517,9 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 	g_autoptr(GPtrArray) devices = NULL;
 	g_autoptr(GPtrArray) volumes = NULL;
 
+	g_return_val_if_fail (kind != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
 	devices = fu_common_get_block_devices (error);
 	if (devices == NULL)
 		return NULL;
@@ -2355,6 +2597,9 @@ fu_common_get_volume_by_device (const gchar *device, GError **error)
 {
 	g_autoptr(GPtrArray) devices = NULL;
 
+	g_return_val_if_fail (device != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
 	/* find matching block device */
 	devices = fu_common_get_block_devices (error);
 	if (devices == NULL)
@@ -2396,6 +2641,8 @@ FuVolume *
 fu_common_get_volume_by_devnum (guint32 devnum, GError **error)
 {
 	g_autoptr(GPtrArray) devices = NULL;
+
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
 	/* find matching block device */
 	devices = fu_common_get_block_devices (error);
@@ -2443,6 +2690,8 @@ fu_common_get_esp_default (GError **error)
 	g_autoptr(GPtrArray) volumes_vfat = g_ptr_array_new ();
 	g_autoptr(GPtrArray) volumes = NULL;
 	g_autoptr(GError) error_local = NULL;
+
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
 	/* for the test suite use local directory for ESP */
 	path_tmp = g_getenv ("FWUPD_UEFI_ESP_PATH");
@@ -2522,12 +2771,22 @@ fu_common_get_esp_default (GError **error)
 FuVolume *
 fu_common_get_esp_for_path (const gchar *esp_path, GError **error)
 {
-	g_autofree gchar *basename = g_path_get_basename (esp_path);
+	g_autofree gchar *basename = NULL;
 	g_autoptr(GPtrArray) volumes = NULL;
+	g_autoptr(GError) error_local = NULL;
 
-	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, error);
-	if (volumes == NULL)
+	g_return_val_if_fail (esp_path != NULL, NULL);
+	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
+
+	volumes = fu_common_get_volumes_by_kind (FU_VOLUME_KIND_ESP, &error_local);
+	if (volumes == NULL) {
+		/* check if it's a valid directory already */
+		if (g_file_test (esp_path, G_FILE_TEST_IS_DIR))
+			return fu_volume_new_from_mount_path (esp_path);
+		g_propagate_error (error, g_steal_pointer (&error_local));
 		return NULL;
+	}
+	basename = g_path_get_basename (esp_path);
 	for (guint i = 0; i < volumes->len; i++) {
 		FuVolume *vol = g_ptr_array_index (volumes, i);
 		g_autofree gchar *vol_basename = g_path_get_basename (fu_volume_get_mount_point (vol));
@@ -2638,4 +2897,27 @@ guint32
 fu_common_crc32 (const guint8 *buf, gsize bufsz)
 {
 	return fu_common_crc32_full (buf, bufsz, 0xFFFFFFFF, 0xEDB88320);
+}
+
+/**
+ * fu_common_uri_get_scheme:
+ * @uri: valid URI, e.g. `https://foo.bar/baz`
+ *
+ * Returns the USI scheme for the given URI.
+ *
+ * Returns: scheme value, or %NULL if invalid, e.g. `https`
+ *
+ * Since: 1.5.6
+ **/
+gchar *
+fu_common_uri_get_scheme (const gchar *uri)
+{
+	gchar *tmp;
+
+	g_return_val_if_fail (uri != NULL, NULL);
+
+	tmp = g_strstr_len (uri, -1, ":");
+	if (tmp == NULL || tmp[0] == '\0')
+		return NULL;
+	return g_utf8_strdown (uri, tmp - uri);
 }

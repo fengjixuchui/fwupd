@@ -1,13 +1,13 @@
 /*
  * Copyright (C) 2018 Richard Hughes <richard@hughsie.com>
- * Copyright (C) 2015-2017 Peter Jones <pjones@redhat.com>
+ * Copyright (C) 2015 Peter Jones <pjones@redhat.com>
  *
  * SPDX-License-Identifier: LGPL-2.1+
  */
 
 #pragma once
 
-#include <glib.h>
+#include <gio/gio.h>
 
 #define FU_EFIVAR_GUID_EFI_GLOBAL			"8be4df61-93ca-11d2-aa0d-00e098032b8c"
 #define FU_EFIVAR_GUID_FWUPDATE				"0abba7dc-e516-4167-bbf5-4d9d1c739416"
@@ -27,34 +27,44 @@ gboolean	 fu_efivar_supported		(GError		**error);
 guint64		 fu_efivar_space_used		(GError		**error);
 gboolean	 fu_efivar_exists		(const gchar	*guid,
 						 const gchar	*name);
+GFileMonitor	*fu_efivar_get_monitor		(const gchar	*guid,
+						 const gchar	*name,
+						 GError		**error);
 gboolean	 fu_efivar_get_data		(const gchar	*guid,
 						 const gchar	*name,
 						 guint8		**data,
 						 gsize		*data_sz,
 						 guint32	*attr,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 GBytes		*fu_efivar_get_data_bytes	(const gchar	*guid,
 						 const gchar	*name,
 						 guint32	*attr,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_efivar_set_data		(const gchar	*guid,
 						 const gchar	*name,
 						 const guint8	*data,
 						 gsize		 sz,
 						 guint32	 attr,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_efivar_set_data_bytes	(const gchar	*guid,
 						 const gchar	*name,
 						 GBytes		*bytes,
 						 guint32	 attr,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_efivar_delete		(const gchar	*guid,
 						 const gchar	*name,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_efivar_delete_with_glob	(const gchar	*guid,
 						 const gchar	*name_glob,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 GPtrArray	*fu_efivar_get_names		(const gchar	*guid,
-						 GError		**error);
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_efivar_secure_boot_enabled	(void);
 gboolean	 fu_efivar_secure_boot_enabled_full(GError	**error);
