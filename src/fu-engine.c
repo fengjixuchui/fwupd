@@ -59,6 +59,9 @@
 #ifdef HAVE_GUSB
 #include "fu-usb-backend.h"
 #endif
+#ifdef HAVE_BLUEZ
+#include "fu-bluez-backend.h"
+#endif
 
 #include "fu-dfu-firmware.h"
 #include "fu-dfuse-firmware.h"
@@ -5988,16 +5991,16 @@ fu_engine_backend_device_removed_cb (FuBackend *backend, FuDevice *device, FuEng
 	if (g_getenv ("FWUPD_PROBE_VERBOSE") != NULL) {
 		g_debug ("%s removed %s",
 			 fu_backend_get_name (backend),
-			 fu_device_get_physical_id (device));
+			 fu_device_get_backend_id (device));
 	}
 
 	/* go through each device and remove any that match */
 	devices = fu_device_list_get_all (self->device_list);
 	for (guint i = 0; i < devices->len; i++) {
 		FuDevice *device_tmp = g_ptr_array_index (devices, i);
-		if (g_strcmp0 (fu_device_get_physical_id (device_tmp),
-			       fu_device_get_physical_id (device)) == 0) {
-			g_debug ("auto-removing GUsbDevice");
+		if (g_strcmp0 (fu_device_get_backend_id (device_tmp),
+			       fu_device_get_backend_id (device)) == 0) {
+			g_debug ("auto-removing backend device");
 			fu_device_list_remove (self->device_list, device_tmp);
 		}
 	}
@@ -6019,9 +6022,15 @@ fu_engine_backend_device_added_cb (FuBackend *backend, FuDevice *device, FuEngin
 	fu_device_set_quirks (device, self->quirks);
 	if (!fu_device_probe (device, &error_local)) {
 		g_warning ("failed to probe device %s: %s",
-			   fu_device_get_physical_id (device),
+			   fu_device_get_backend_id (device),
 			   error_local->message);
 		return;
+	}
+
+	/* super useful for plugin development */
+	if (g_getenv ("FWUPD_PROBE_VERBOSE") != NULL) {
+		g_autofree gchar *str = fu_device_to_string (FU_DEVICE (device));
+		g_debug ("%s added %s", fu_backend_get_name (backend), str);
 	}
 
 	/* can be specified using a quirk */
@@ -6044,7 +6053,7 @@ fu_engine_backend_device_added_cb (FuBackend *backend, FuDevice *device, FuEngin
 				continue;
 			}
 			g_warning ("failed to add device %s: %s",
-				   fu_device_get_physical_id (device),
+				   fu_device_get_backend_id (device),
 				   error->message);
 			continue;
 		}
@@ -6584,6 +6593,9 @@ fu_engine_init (FuEngine *self)
 #endif
 #ifdef HAVE_GUDEV
 	g_ptr_array_add (self->backends, fu_udev_backend_new (self->udev_subsystems));
+#endif
+#ifdef HAVE_BLUEZ
+	g_ptr_array_add (self->backends, fu_bluez_backend_new ());
 #endif
 
 	/* setup Jcat context */

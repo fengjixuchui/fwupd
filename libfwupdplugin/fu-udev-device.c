@@ -170,8 +170,10 @@ fu_udev_device_to_string (FuDevice *device, guint idt, GString *str)
 #endif
 
 	/* subclassed */
-	if (klass->to_string != NULL)
+	if (klass->to_string != NULL) {
+		g_warning ("FuUdevDevice->to_string is deprecated!");
 		klass->to_string (self, idt, str);
+	}
 }
 
 static void
@@ -498,6 +500,7 @@ fu_udev_device_probe (FuDevice *device, GError **error)
 
 	/* subclassed */
 	if (klass->probe != NULL) {
+		g_warning ("FuUdevDevice->probe is deprecated!");
 		if (!klass->probe (self, error))
 			return FALSE;
 	}
@@ -560,6 +563,9 @@ fu_udev_device_set_dev (FuUdevDevice *self, GUdevDevice *udev_device)
 	fu_udev_device_set_subsystem (self, g_udev_device_get_subsystem (priv->udev_device));
 	fu_udev_device_set_driver (self, g_udev_device_get_driver (priv->udev_device));
 	fu_udev_device_set_device_file (self, g_udev_device_get_device_file (priv->udev_device));
+
+	/* so we can display something sensible for unclaimed devices */
+	fu_device_set_backend_id (FU_DEVICE (self), g_udev_device_get_sysfs_path (priv->udev_device));
 
 	/* fall back to the first thing handled by misc drivers */
 	if (priv->device_file == NULL) {
@@ -1226,6 +1232,7 @@ fu_udev_device_open (FuDevice *device, GError **error)
 
 	/* subclassed */
 	if (klass->open != NULL) {
+		g_warning ("FuUdevDevice->open is deprecated!");
 		if (!klass->open (self, error))
 			return FALSE;
 	}
@@ -1277,6 +1284,7 @@ fu_udev_device_close (FuDevice *device, GError **error)
 
 	/* subclassed */
 	if (klass->close != NULL) {
+		g_warning ("FuUdevDevice->close is deprecated!");
 		if (!klass->close (self, error))
 			return FALSE;
 	}
