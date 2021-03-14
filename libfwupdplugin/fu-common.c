@@ -854,6 +854,33 @@ fu_common_write_uint32 (guint8 *buf, guint32 val_native, FuEndianType endian)
 }
 
 /**
+ * fu_common_write_uint64:
+ * @buf: A writable buffer
+ * @val_native: a value in host byte-order
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ *
+ * Writes a value to a buffer using a specified endian.
+ *
+ * Since: 1.5.8
+ **/
+void
+fu_common_write_uint64 (guint8 *buf, guint64 val_native, FuEndianType endian)
+{
+	guint64 val_hw;
+	switch (endian) {
+	case G_BIG_ENDIAN:
+		val_hw = GUINT64_TO_BE(val_native);
+		break;
+	case G_LITTLE_ENDIAN:
+		val_hw = GUINT64_TO_LE(val_native);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+	memcpy (buf, &val_hw, sizeof(val_hw));
+}
+
+/**
  * fu_common_read_uint16:
  * @buf: A readable buffer
  * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
@@ -904,6 +931,35 @@ fu_common_read_uint32 (const guint8 *buf, FuEndianType endian)
 		break;
 	case G_LITTLE_ENDIAN:
 		val_native = GUINT32_FROM_LE(val_hw);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+	return val_native;
+}
+
+/**
+ * fu_common_read_uint64:
+ * @buf: A readable buffer
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ *
+ * Read a value from a buffer using a specified endian.
+ *
+ * Returns: a value in host byte-order
+ *
+ * Since: 1.5.8
+ **/
+guint64
+fu_common_read_uint64 (const guint8 *buf, FuEndianType endian)
+{
+	guint64 val_hw, val_native;
+	memcpy (&val_hw, buf, sizeof(val_hw));
+	switch (endian) {
+	case G_BIG_ENDIAN:
+		val_native = GUINT64_FROM_BE(val_hw);
+		break;
+	case G_LITTLE_ENDIAN:
+		val_native = GUINT64_FROM_LE(val_hw);
 		break;
 	default:
 		g_assert_not_reached ();
@@ -1665,7 +1721,7 @@ fu_common_bytes_compare (GBytes *bytes1, GBytes *bytes2, GError **error)
  * @bytes: a #GBytes
  * @sz: the desired size in bytes
  *
- * Pads a GBytes to a given @sz with `0xff`.
+ * Pads a GBytes to a minimum @sz with `0xff`.
  *
  * Return value: (transfer full): a #GBytes
  *
@@ -1676,7 +1732,8 @@ fu_common_bytes_pad (GBytes *bytes, gsize sz)
 {
 	gsize bytes_sz;
 
-	g_return_val_if_fail (g_bytes_get_size (bytes) <= sz, NULL);
+	g_return_val_if_fail (bytes != NULL, NULL);
+	g_return_val_if_fail (sz != 0, NULL);
 
 	/* pad */
 	bytes_sz = g_bytes_get_size (bytes);
@@ -1688,7 +1745,7 @@ fu_common_bytes_pad (GBytes *bytes, gsize sz)
 		return g_bytes_new_take (data_new, sz);
 	}
 
-	/* exactly right */
+	/* not required */
 	return g_bytes_ref (bytes);
 }
 
@@ -2179,6 +2236,194 @@ fu_common_read_uint32_safe (const guint8 *buf,
 }
 
 /**
+ * fu_common_read_uint64_safe:
+ * @buf: source buffer
+ * @bufsz: maximum size of @buf, typically `sizeof(buf)`
+ * @offset: offset in bytes into @buf to copy from
+ * @value: (out) (allow-none): the parsed value
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @error: A #GError or %NULL
+ *
+ * Read a value from a buffer using a specified endian in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * Return value: %TRUE if @value was set, %FALSE otherwise
+ *
+ * Since: 1.5.8
+ **/
+gboolean
+fu_common_read_uint64_safe (const guint8 *buf,
+			    gsize bufsz,
+			    gsize offset,
+			    guint64 *value,
+			    FuEndianType endian,
+			    GError **error)
+{
+	guint8 dst[8] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	if (!fu_memcpy_safe (dst, sizeof(dst), 0x0,	/* dst */
+			     buf, bufsz, offset,	/* src */
+			     sizeof(dst), error))
+		return FALSE;
+	if (value != NULL)
+		*value = fu_common_read_uint64 (dst, endian);
+	return TRUE;
+}
+
+/**
+ * fu_common_write_uint8_safe:
+ * @buf: source buffer
+ * @bufsz: maximum size of @buf, typically `sizeof(buf)`
+ * @offset: offset in bytes into @buf to write to
+ * @value: the value to write
+ * @error: A #GError or %NULL
+ *
+ * Write a value to a buffer in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * Return value: %TRUE if @value was written, %FALSE otherwise
+ *
+ * Since: 1.5.8
+ **/
+gboolean
+fu_common_write_uint8_safe (guint8 *buf,
+			    gsize bufsz,
+			    gsize offset,
+			    guint8 value,
+			    GError **error)
+{
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	return fu_memcpy_safe (buf, bufsz, offset,		/* dst */
+			       &value, sizeof(value), 0x0,	/* src */
+			       sizeof(value), error);
+}
+
+/**
+ * fu_common_write_uint16_safe:
+ * @buf: source buffer
+ * @bufsz: maximum size of @buf, typically `sizeof(buf)`
+ * @offset: offset in bytes into @buf to write to
+ * @value: the value to write
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @error: A #GError or %NULL
+ *
+ * Write a value to a buffer using a specified endian in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * Return value: %TRUE if @value was written, %FALSE otherwise
+ *
+ * Since: 1.5.8
+ **/
+gboolean
+fu_common_write_uint16_safe (guint8 *buf,
+			     gsize bufsz,
+			     gsize offset,
+			     guint16 value,
+			     FuEndianType endian,
+			     GError **error)
+{
+	guint8 tmp[2] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	fu_common_write_uint16 (tmp, value, endian);
+	return fu_memcpy_safe (buf, bufsz, offset,	/* dst */
+			       tmp, sizeof(tmp), 0x0,	/* src */
+			       sizeof(tmp), error);
+}
+
+/**
+ * fu_common_write_uint32_safe:
+ * @buf: source buffer
+ * @bufsz: maximum size of @buf, typically `sizeof(buf)`
+ * @offset: offset in bytes into @buf to write to
+ * @value: the value to write
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @error: A #GError or %NULL
+ *
+ * Write a value to a buffer using a specified endian in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * Return value: %TRUE if @value was written, %FALSE otherwise
+ *
+ * Since: 1.5.8
+ **/
+gboolean
+fu_common_write_uint32_safe (guint8 *buf,
+			     gsize bufsz,
+			     gsize offset,
+			     guint32 value,
+			     FuEndianType endian,
+			     GError **error)
+{
+	guint8 tmp[4] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	fu_common_write_uint32 (tmp, value, endian);
+	return fu_memcpy_safe (buf, bufsz, offset,	/* dst */
+			       tmp, sizeof(tmp), 0x0,	/* src */
+			       sizeof(tmp), error);
+}
+
+/**
+ * fu_common_write_uint64_safe:
+ * @buf: source buffer
+ * @bufsz: maximum size of @buf, typically `sizeof(buf)`
+ * @offset: offset in bytes into @buf to write to
+ * @value: the value to write
+ * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @error: A #GError or %NULL
+ *
+ * Write a value to a buffer using a specified endian in a safe way.
+ *
+ * You don't need to use this function in "obviously correct" cases, nor should
+ * you use it when performance is a concern. Only us it when you're not sure if
+ * malicious data from a device or firmware could cause memory corruption.
+ *
+ * Return value: %TRUE if @value was written, %FALSE otherwise
+ *
+ * Since: 1.5.8
+ **/
+gboolean
+fu_common_write_uint64_safe (guint8 *buf,
+			     gsize bufsz,
+			     gsize offset,
+			     guint64 value,
+			     FuEndianType endian,
+			     GError **error)
+{
+	guint8 tmp[8] = { 0x0 };
+
+	g_return_val_if_fail (buf != NULL, FALSE);
+	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	fu_common_write_uint64 (tmp, value, endian);
+	return fu_memcpy_safe (buf, bufsz, offset,	/* dst */
+			       tmp, sizeof(tmp), 0x0,	/* src */
+			       sizeof(tmp), error);
+}
+
+/**
  * fu_byte_array_append_uint8:
  * @array: A #GByteArray
  * @data:  #guint8
@@ -2230,6 +2475,60 @@ fu_byte_array_append_uint32 (GByteArray *array, guint32 data, FuEndianType endia
 }
 
 /**
+ * fu_byte_array_append_uint64:
+ * @array: A #GByteArray
+ * @data:  #guint64
+ * @endian: #FuEndianType
+ *
+ * Adds a 64 bit integer to a byte array
+ *
+ * Since: 1.5.8
+ **/
+void
+fu_byte_array_append_uint64 (GByteArray *array, guint64 data, FuEndianType endian)
+{
+	guint8 buf[8];
+	fu_common_write_uint64 (buf, data, endian);
+	g_byte_array_append (array, buf, sizeof(buf));
+}
+
+/**
+ * fu_byte_array_append_bytes:
+ * @array: A #GByteArray
+ * @bytes:  A #GBytes
+ *
+ * Adds the contents of a GBytes to a byte array
+ *
+ * Since: 1.5.8
+ **/
+void
+fu_byte_array_append_bytes (GByteArray *array, GBytes *bytes)
+{
+	g_byte_array_append (array,
+			     g_bytes_get_data (bytes, NULL),
+			     g_bytes_get_size (bytes));
+}
+
+/**
+ * fu_byte_array_set_size_full:
+ * @array: a #GByteArray
+ * @length:  the new size of the GByteArray
+ * @data: the byte used to pad the array
+ *
+ * Sets the size of the GByteArray, expanding with @data as required.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_byte_array_set_size_full (GByteArray *array, guint length, guint8 data)
+{
+	guint oldlength = array->len;
+	g_byte_array_set_size (array, length);
+	if (length > oldlength)
+		memset (array->data + oldlength, data, length - oldlength);
+}
+
+/**
  * fu_byte_array_set_size:
  * @array: a #GByteArray
  * @length:  the new size of the GByteArray
@@ -2241,10 +2540,26 @@ fu_byte_array_append_uint32 (GByteArray *array, guint32 data, FuEndianType endia
 void
 fu_byte_array_set_size (GByteArray *array, guint length)
 {
-	guint oldlength = array->len;
-	g_byte_array_set_size (array, length);
-	if (length > oldlength)
-		memset (array->data + oldlength, 0x0, length - oldlength);
+	return fu_byte_array_set_size_full (array, length, 0x0);
+}
+
+/**
+ * fu_byte_array_align_up:
+ * @array: a #GByteArray
+ * @alignment: align to this power of 2
+ * @data: the byte used to pad the array
+ *
+ * Align a byte array length to a power of 2 boundary, where @alignment is the
+ * bit position to align to. If @alignment is zero then @array is unchanged.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_byte_array_align_up (GByteArray *array, guint8 alignment, guint8 data)
+{
+	fu_byte_array_set_size_full (array,
+				     fu_common_align_up (array->len, alignment),
+				     data);
 }
 
 /**
@@ -2330,22 +2645,6 @@ fu_common_cpuid (guint32 leaf,
 			     "no <cpuid.h> support");
 	return FALSE;
 #endif
-}
-
-/**
- * fu_common_is_cpu_intel:
- *
- * Uses CPUID to discover the CPU vendor and check if it is Intel.
- *
- * Return value: %TRUE if the vendor was Intel.
- * Deprecated: 1.5.5: Use fu_common_get_cpu_vendor() instead.
- *
- * Since: 1.5.0
- **/
-gboolean
-fu_common_is_cpu_intel (void)
-{
-	return fu_common_get_cpu_vendor () == FU_CPU_VENDOR_INTEL;
 }
 
 /**
@@ -2941,4 +3240,39 @@ fu_common_uri_get_scheme (const gchar *uri)
 	if (tmp == NULL || tmp[0] == '\0')
 		return NULL;
 	return g_utf8_strdown (uri, tmp - uri);
+}
+
+/**
+ * fu_common_align_up:
+ * @value: value to align
+ * @alignment: align to this power of 2
+ *
+ * Align a value to a power of 2 boundary, where @alignment is the bit position
+ * to align to. If @alignment is zero then @value is always returned unchanged.
+ *
+ * Returns: aligned value, which will be the same as @value if already aligned,
+ * 		or %G_MAXSIZE if the value would overflow
+ *
+ * Since: 1.6.0
+ **/
+gsize
+fu_common_align_up (gsize value, guint8 alignment)
+{
+	gsize value_new;
+	guint32 mask = 1 << alignment;
+
+	/* no alignment required */
+	if ((value & (mask - 1)) == 0)
+		return value;
+
+	/* increment up to the next alignment value */
+	value_new = value + mask;
+	value_new &= ~(mask - 1);
+
+	/* overflow */
+	if (value_new < value)
+		return G_MAXSIZE;
+
+	/* success */
+	return value_new;
 }

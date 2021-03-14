@@ -34,8 +34,7 @@ fu_ebitdo_firmware_parse (FuFirmware *firmware,
 	FuEbitdoFirmwareHeader *hdr;
 	guint32 payload_len;
 	g_autofree gchar *version = NULL;
-	g_autoptr(FuFirmwareImage) img_hdr = fu_firmware_image_new (NULL);
-	g_autoptr(FuFirmwareImage) img_payload = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmware) img_hdr = fu_firmware_new ();
 	g_autoptr(GBytes) fw_hdr = NULL;
 	g_autoptr(GBytes) fw_payload = NULL;
 
@@ -84,8 +83,8 @@ fu_ebitdo_firmware_parse (FuFirmware *firmware,
 					     error);
 	if (fw_hdr == NULL)
 		return FALSE;
-	fu_firmware_image_set_id (img_hdr, FU_FIRMWARE_IMAGE_ID_HEADER);
-	fu_firmware_image_set_bytes (img_hdr, fw_hdr);
+	fu_firmware_set_id (img_hdr, FU_FIRMWARE_ID_HEADER);
+	fu_firmware_set_bytes (img_hdr, fw_hdr);
 	fu_firmware_add_image (firmware, img_hdr);
 
 	/* add payload */
@@ -95,11 +94,29 @@ fu_ebitdo_firmware_parse (FuFirmware *firmware,
 						 error);
 	if (fw_payload == NULL)
 		return FALSE;
-	fu_firmware_image_set_id (img_payload, FU_FIRMWARE_IMAGE_ID_PAYLOAD);
-	fu_firmware_image_set_addr (img_payload, GUINT32_FROM_LE(hdr->destination_addr));
-	fu_firmware_image_set_bytes (img_payload, fw_payload);
-	fu_firmware_add_image (firmware, img_payload);
+	fu_firmware_set_id (firmware, FU_FIRMWARE_ID_PAYLOAD);
+	fu_firmware_set_addr (firmware, GUINT32_FROM_LE(hdr->destination_addr));
+	fu_firmware_set_bytes (firmware, fw_payload);
 	return TRUE;
+}
+
+static GBytes *
+fu_ebitdo_firmware_write (FuFirmware *firmware, GError **error)
+{
+	g_autoptr(GByteArray) buf = g_byte_array_new ();
+	g_autoptr(GBytes) blob = NULL;
+
+	/* header then payload */
+	blob = fu_firmware_get_bytes (firmware, error);
+	if (blob == NULL)
+		return NULL;
+	fu_byte_array_append_uint32 (buf, fu_firmware_get_version_raw (firmware), G_LITTLE_ENDIAN);
+	fu_byte_array_append_uint32 (buf, fu_firmware_get_addr (firmware), G_LITTLE_ENDIAN);
+	fu_byte_array_append_uint32 (buf, g_bytes_get_size (blob), G_LITTLE_ENDIAN);
+	for (guint i = 0; i < 4; i++)
+		fu_byte_array_append_uint32 (buf, 0, G_LITTLE_ENDIAN);
+	fu_byte_array_append_bytes (buf, blob);
+	return g_byte_array_free_to_bytes (g_steal_pointer (&buf));
 }
 
 static void
@@ -112,6 +129,7 @@ fu_ebitdo_firmware_class_init (FuEbitdoFirmwareClass *klass)
 {
 	FuFirmwareClass *klass_firmware = FU_FIRMWARE_CLASS (klass);
 	klass_firmware->parse = fu_ebitdo_firmware_parse;
+	klass_firmware->write = fu_ebitdo_firmware_write;
 }
 
 FuFirmware *

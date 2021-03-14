@@ -368,7 +368,7 @@ fu_dfu_csr_device_download (FuDevice *device,
 	g_autoptr(GPtrArray) chunks = NULL;
 
 	/* get default image */
-	blob = fu_firmware_get_image_default_bytes (firmware, error);
+	blob = fu_firmware_get_bytes (firmware, error);
 	if (blob == NULL)
 		return FALSE;
 
@@ -433,7 +433,8 @@ fu_dfu_csr_device_setup (FuDevice *device, GError **error)
 static void
 fu_dfu_csr_device_init (FuDfuCsrDevice *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "com.qualcomm.dfu");
+	fu_device_add_protocol (FU_DEVICE (self), "com.qualcomm.dfu");
+	fu_device_add_internal_flag (FU_DEVICE (self), FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID);
 }
 
 static void

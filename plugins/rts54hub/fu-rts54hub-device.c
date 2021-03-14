@@ -404,7 +404,7 @@ fu_rts54hub_device_write_firmware (FuDevice *device,
 	g_autoptr(GPtrArray) chunks = NULL;
 
 	/* get default image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -500,7 +500,7 @@ fu_rts54hub_device_prepare_firmware (FuDevice *device,
 static void
 fu_rts54hub_device_init (FuRts54HubDevice *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "com.realtek.rts54");
+	fu_device_add_protocol (FU_DEVICE (self), "com.realtek.rts54");
 	fu_device_set_remove_delay (FU_DEVICE (self), FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
 }
 

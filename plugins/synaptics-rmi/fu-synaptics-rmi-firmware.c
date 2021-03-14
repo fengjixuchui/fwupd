@@ -154,13 +154,13 @@ fu_synaptics_rmi_firmware_add_image (FuFirmware *firmware, const gchar *id,
 				     GError **error)
 {
 	g_autoptr(GBytes) bytes = NULL;
-	g_autoptr(FuFirmwareImage) img = NULL;
+	g_autoptr(FuFirmware) img = NULL;
 
 	bytes = fu_common_bytes_new_offset (fw, offset, sz, error);
 	if (bytes == NULL)
 		return FALSE;
-	img = fu_firmware_image_new (bytes);
-	fu_firmware_image_set_id (img, id);
+	img = fu_firmware_new_from_bytes (bytes);
+	fu_firmware_set_id (img, id);
 	fu_firmware_add_image (firmware, img);
 	return TRUE;
 }
@@ -514,16 +514,17 @@ static GBytes *
 fu_synaptics_rmi_firmware_write_v0x (FuFirmware *firmware, GError **error)
 {
 	FuSynapticsRmiFirmware *self = FU_SYNAPTICS_RMI_FIRMWARE (firmware);
-	GByteArray *buf = g_byte_array_new ();
 	gsize bufsz = 0;
-	g_autoptr(FuFirmwareImage) img = NULL;
+	guint32 csum;
+	g_autoptr(FuFirmware) img = NULL;
+	g_autoptr(GByteArray) buf = g_byte_array_new ();
 	g_autoptr(GBytes) buf_blob = NULL;
 
 	/* default image */
-	img = fu_firmware_get_image_default (firmware, error);
+	img = fu_firmware_get_image_by_id (firmware, "ui", error);
 	if (img == NULL)
 		return NULL;
-	buf_blob = fu_firmware_image_write (img, error);
+	buf_blob = fu_firmware_write (img, error);
 	if (buf_blob == NULL)
 		return NULL;
 	bufsz = g_bytes_get_size (buf_blob);
@@ -544,16 +545,23 @@ fu_synaptics_rmi_firmware_write_v0x (FuFirmware *firmware, GError **error)
 	fu_common_write_uint32 (buf->data + RMI_IMG_CONFIG_SIZE_OFFSET, bufsz, G_LITTLE_ENDIAN);
 	fu_common_write_uint32 (buf->data + RMI_IMG_FW_OFFSET + 0x0, 0xdead, G_LITTLE_ENDIAN);		/* img */
 	fu_common_write_uint32 (buf->data + RMI_IMG_FW_OFFSET + bufsz, 0xbeef, G_LITTLE_ENDIAN);	/* config */
-	return g_byte_array_free_to_bytes (buf);
+
+	/* fixup checksum */
+	csum = fu_synaptics_rmi_generate_checksum (buf->data + 4, buf->len - 4);
+	fu_common_write_uint32 (buf->data + RMI_IMG_CHECKSUM_OFFSET, csum, G_LITTLE_ENDIAN);
+
+	/* success */
+	return g_byte_array_free_to_bytes (g_steal_pointer (&buf));
 }
 
 static GBytes *
 fu_synaptics_rmi_firmware_write_v10 (FuFirmware *firmware, GError **error)
 {
 	FuSynapticsRmiFirmware *self = FU_SYNAPTICS_RMI_FIRMWARE (firmware);
-	GByteArray *buf = g_byte_array_new ();
-	gsize bufsz = 0;
-	g_autoptr(FuFirmwareImage) img = NULL;
+	gsize bufsz;
+	guint32 csum;
+	g_autoptr(FuFirmware) img = NULL;
+	g_autoptr(GByteArray) buf = g_byte_array_new ();
 	g_autoptr(GBytes) buf_blob = NULL;
 
 	/* header | desc_hdr | offset_table | desc | flash_config |
@@ -566,18 +574,19 @@ fu_synaptics_rmi_firmware_write_v10 (FuFirmware *firmware, GError **error)
 	guint32 offset_table[] = { RMI_IMG_FW_OFFSET + 0x24 };				/* offset to first RmiFirmwareContainerDescriptor */
 	RmiFirmwareContainerDescriptor desc = {
 		.container_id =		GUINT16_TO_LE(RMI_FIRMWARE_CONTAINER_ID_FLASH_CONFIG),
-		.content_length =	GUINT32_TO_LE(bufsz),
+		.content_length =	0x0,
 		.content_address =	GUINT32_TO_LE(RMI_IMG_FW_OFFSET + 0x44),
 	};
 
 	/* default image */
-	img = fu_firmware_get_image_default (firmware, error);
+	img = fu_firmware_get_image_by_id (firmware, "ui", error);
 	if (img == NULL)
 		return NULL;
-	buf_blob = fu_firmware_image_write (img, error);
+	buf_blob = fu_firmware_write (img, error);
 	if (buf_blob == NULL)
 		return NULL;
 	bufsz = g_bytes_get_size (buf_blob);
+	desc.content_length = GUINT32_TO_LE(bufsz);
 
 	/* create empty block */
 	fu_byte_array_set_size (buf, RMI_IMG_FW_OFFSET + 0x48);
@@ -602,7 +611,13 @@ fu_synaptics_rmi_firmware_write_v10 (FuFirmware *firmware, GError **error)
 	memcpy (buf->data + RMI_IMG_FW_OFFSET + 0x20, offset_table, sizeof(offset_table));
 	memcpy (buf->data + RMI_IMG_FW_OFFSET + 0x24, &desc, sizeof(desc));
 	fu_common_write_uint32 (buf->data + RMI_IMG_FW_OFFSET + 0x44, 0xfeed, G_LITTLE_ENDIAN);	/* flash_config */
-	return g_byte_array_free_to_bytes (buf);
+
+	/* fixup checksum */
+	csum = fu_synaptics_rmi_generate_checksum (buf->data + 4, buf->len - 4);
+	fu_common_write_uint32 (buf->data + RMI_IMG_CHECKSUM_OFFSET, csum, G_LITTLE_ENDIAN);
+
+	/* success */
+	return g_byte_array_free_to_bytes (g_steal_pointer (&buf));
 }
 
 static gboolean

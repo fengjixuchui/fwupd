@@ -257,7 +257,7 @@ fu_fresco_pd_device_write_firmware (FuDevice *device,
 	g_autoptr(GBytes) fw = NULL;
 
 	/* get default blob, which we know is already bigger than FirmwareMin */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	buf = g_bytes_get_data (fw, &bufsz);
@@ -387,7 +387,8 @@ fu_fresco_pd_device_init (FuFrescoPdDevice *self)
 {
 	fu_device_add_icon (FU_DEVICE (self), "audio-card");
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
-	fu_device_set_protocol (FU_DEVICE (self), "com.frescologic.pd");
+	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_protocol (FU_DEVICE (self), "com.frescologic.pd");
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_QUAD);
 	fu_device_set_install_duration (FU_DEVICE (self), 15);
 	fu_device_set_remove_delay (FU_DEVICE (self), 20000);

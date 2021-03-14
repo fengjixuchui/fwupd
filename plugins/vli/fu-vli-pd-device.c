@@ -471,7 +471,7 @@ fu_vli_pd_device_write_firmware (FuDevice *device,
 	g_autoptr(GBytes) fw = NULL;
 
 	/* binary blob */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -678,7 +678,7 @@ static void
 fu_vli_pd_device_init (FuVliPdDevice *self)
 {
 	fu_device_add_icon (FU_DEVICE (self), "audio-card");
-	fu_device_set_protocol (FU_DEVICE (self), "com.vli.pd");
+	fu_device_add_protocol (FU_DEVICE (self), "com.vli.pd");
 	fu_device_set_summary (FU_DEVICE (self), "USB PD");
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_CAN_VERIFY_IMAGE);

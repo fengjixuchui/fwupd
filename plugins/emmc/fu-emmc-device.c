@@ -336,7 +336,7 @@ fu_emmc_device_write_firmware (FuDevice *device,
 	if (!fu_emmc_read_extcsd (FU_EMMC_DEVICE (device), ext_csd, sizeof (ext_csd), error))
 		return FALSE;
 
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	fw_size = g_bytes_get_size (fw);
@@ -495,7 +495,7 @@ fu_emmc_device_write_firmware (FuDevice *device,
 static void
 fu_emmc_device_init (FuEmmcDevice *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "org.jedec.mmc");
+	fu_device_add_protocol (FU_DEVICE (self), "org.jedec.mmc");
 	fu_device_add_icon (FU_DEVICE (self), "media-memory");
 }
 

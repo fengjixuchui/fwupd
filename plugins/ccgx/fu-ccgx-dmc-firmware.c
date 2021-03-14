@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "fu-chunk.h"
 #include "fu-common.h"
 #include "fu-common-version.h"
 #include "fu-ccgx-dmc-common.h"
@@ -27,7 +28,7 @@ struct _FuCcgxDmcFirmware {
 G_DEFINE_TYPE (FuCcgxDmcFirmware, fu_ccgx_dmc_firmware, FU_TYPE_FIRMWARE)
 
 static void
-fu_ccgx_dmc_firmware_image_record_free (FuCcgxDmcFirmwareImageRecord *rcd)
+fu_ccgx_dmc_firmware_record_free (FuCcgxDmcFirmwareRecord *rcd)
 {
 	if (rcd->seg_records != NULL)
 		g_ptr_array_unref (rcd->seg_records);
@@ -42,7 +43,7 @@ fu_ccgx_dmc_firmware_segment_record_free (FuCcgxDmcFirmwareSegmentRecord *rcd)
 	g_free (rcd);
 }
 
-G_DEFINE_AUTOPTR_CLEANUP_FUNC(FuCcgxDmcFirmwareImageRecord, fu_ccgx_dmc_firmware_image_record_free)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(FuCcgxDmcFirmwareRecord, fu_ccgx_dmc_firmware_record_free)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(FuCcgxDmcFirmwareSegmentRecord, fu_ccgx_dmc_firmware_segment_record_free)
 
 GPtrArray *
@@ -85,7 +86,7 @@ static gboolean
 fu_ccgx_dmc_firmware_parse_segment (FuFirmware *firmware,
 				    const guint8 *buf,
 				    gsize bufsz,
-				    FuCcgxDmcFirmwareImageRecord *img_rcd,
+				    FuCcgxDmcFirmwareRecord *img_rcd,
 				    gsize *seg_off,
 				    FwupdInstallFlags flags,
 				    GError **error)
@@ -184,10 +185,10 @@ fu_ccgx_dmc_firmware_parse_image (FuFirmware *firmware,
 
 	/* set initial segment info offset */
 	for (guint32 i = 0; i < image_count; i++) {
-		g_autoptr(FuCcgxDmcFirmwareImageRecord) img_rcd = NULL;
+		g_autoptr(FuCcgxDmcFirmwareRecord) img_rcd = NULL;
 
 		/* read image info */
-		img_rcd = g_new0 (FuCcgxDmcFirmwareImageRecord, 1);
+		img_rcd = g_new0 (FuCcgxDmcFirmwareRecord, 1);
 		if (!fu_common_read_uint8_safe (buf, bufsz,
 						img_off + G_STRUCT_OFFSET(FwctImageInfo, row_size),
 						&img_rcd->row_size, error))
@@ -254,7 +255,7 @@ fu_ccgx_dmc_firmware_parse (FuFirmware *firmware,
 	guint32 hdr_signature = 0;
 	guint8 hdr_image_count = 0;
 	const guint8 *buf = g_bytes_get_data (fw, &bufsz);
-	g_autoptr(FuFirmwareImage) img = fu_firmware_image_new (fw);
+	g_autoptr(FuFirmware) img = fu_firmware_new_from_bytes (fw);
 
 	/* check for 'F' 'W' 'C' 'T' in signature */
 	if (!fu_common_read_uint32_safe (buf, bufsz, 0x0,
@@ -334,7 +335,7 @@ fu_ccgx_dmc_firmware_parse (FuFirmware *firmware,
 		return FALSE;
 
 	/* add something, although we'll use the records for the update */
-	fu_firmware_image_set_addr (img, 0x0);
+	fu_firmware_set_addr (img, 0x0);
 	fu_firmware_add_image (firmware, img);
 	return TRUE;
 }
@@ -387,14 +388,16 @@ fu_ccgx_dmc_firmware_write (FuFirmware *firmware, GError **error)
 
 	/* add segments */
 	for (guint i = 0; i < images->len; i++) {
-		FuFirmwareImage *img = g_ptr_array_index (images, i);
-		g_autoptr(GBytes) img_bytes = fu_firmware_image_get_bytes (img);
+		FuFirmware *img = g_ptr_array_index (images, i);
+		g_autoptr(GPtrArray) chunks = NULL;
+		g_autoptr(GBytes) img_bytes = fu_firmware_get_bytes (img, error);
+		if (img_bytes == NULL)
+			return NULL;
+		chunks = fu_chunk_array_new_from_bytes (img_bytes, 0x0, 0x0, 64);
 		fu_byte_array_append_uint8 (buf, 0x0);				/* img_id */
 		fu_byte_array_append_uint8 (buf, 0x0);				/* type */
 		fu_byte_array_append_uint16 (buf, 0x0, G_LITTLE_ENDIAN);	/* start_row, unknown */
-		fu_byte_array_append_uint16 (buf,
-					     MAX (g_bytes_get_size (img_bytes) / 64, 1),
-					     G_LITTLE_ENDIAN);			/* num_rows */
+		fu_byte_array_append_uint16 (buf, MAX (chunks->len, 1), G_LITTLE_ENDIAN); /* num_rows */
 		for (guint j = 0; j < 2; j++)
 			fu_byte_array_append_uint8 (buf, 0x0);			/* reserv0 */
 	}
@@ -405,15 +408,17 @@ fu_ccgx_dmc_firmware_write (FuFirmware *firmware, GError **error)
 
 	/* add image headers */
 	for (guint i = 0; i < images->len; i++) {
-		FuFirmwareImage *img = g_ptr_array_index (images, i);
+		FuFirmware *img = g_ptr_array_index (images, i);
 		gsize csumbufsz = DMC_HASH_SIZE;
 		gsize img_offset = sizeof(FwctInfo) + (i * sizeof(FwctImageInfo));
 		guint8 csumbuf[DMC_HASH_SIZE] = { 0x0 };
 		g_autoptr(GChecksum) csum = g_checksum_new (G_CHECKSUM_SHA256);
-		g_autoptr(GBytes) img_bytes = fu_firmware_image_get_bytes (img);
+		g_autoptr(GBytes) img_bytes = fu_firmware_get_bytes (img, NULL);
 		g_autoptr(GBytes) img_padded = NULL;
+		g_autoptr(GPtrArray) chunks = NULL;
 
-		img_padded = fu_common_bytes_pad (img_bytes, 64);
+		chunks = fu_chunk_array_new_from_bytes (img_bytes, 0x0, 0x0, 64);
+		img_padded = fu_common_bytes_pad (img_bytes, MAX (chunks->len, 1) * 64);
 		g_byte_array_append (buf,
 				     g_bytes_get_data (img_padded, NULL),
 				     g_bytes_get_size (img_padded));
@@ -436,7 +441,7 @@ fu_ccgx_dmc_firmware_write (FuFirmware *firmware, GError **error)
 static void
 fu_ccgx_dmc_firmware_init (FuCcgxDmcFirmware *self)
 {
-	self->image_records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_ccgx_dmc_firmware_image_record_free);
+	self->image_records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_ccgx_dmc_firmware_record_free);
 	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_HAS_CHECKSUM);
 }
 

@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.5.8',
+  version : '1.6.0',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -50,7 +50,7 @@ libfwupd_lt_current = '2'
 libfwupd_lt_revision = '0'
 libfwupd_lt_age = '0'
 libfwupd_lt_version = '@0@.@1@.@2@'.format(libfwupd_lt_current, libfwupd_lt_age, libfwupd_lt_revision)
-libfwupdplugin_lt_current = '1'
+libfwupdplugin_lt_current = '2'
 libfwupdplugin_lt_revision = '0'
 libfwupdplugin_lt_age = '0'
 libfwupdplugin_lt_version = '@0@.@1@.@2@'.format(libfwupdplugin_lt_current, libfwupdplugin_lt_age, libfwupdplugin_lt_revision)
@@ -376,7 +376,7 @@ if build_standalone and get_option('plugin_uefi_capsule')
   conf.set_quoted('EFI_MACHINE_TYPE_NAME', EFI_MACHINE_TYPE_NAME)
   r = run_command([python3, 'po/test-deps'])
   if r.returncode() != 0
-    error(r.stderr())
+    error(r.stdout())
   endif
 endif
 

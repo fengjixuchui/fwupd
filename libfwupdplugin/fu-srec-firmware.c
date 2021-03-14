@@ -280,7 +280,6 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 	guint16 data_cnt = 0;
 	guint32 addr32_last = 0;
 	guint32 img_address = 0;
-	g_autoptr(FuFirmwareImage) img = fu_firmware_image_new (NULL);
 	g_autoptr(GBytes) img_bytes = NULL;
 	g_autoptr(GByteArray) outbuf = g_byte_array_new ();
 
@@ -310,7 +309,7 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 				g_string_append_c (modname, tmp);
 			}
 			if (modname->len != 0)
-				fu_firmware_image_set_id (img, modname->str);
+				fu_firmware_set_id (firmware, modname->str);
 			got_hdr = TRUE;
 			continue;
 		}
@@ -380,6 +379,14 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 				if (img_address == 0x0)
 					img_address = rcd->addr;
 				addr32_last = rcd->addr + rcd->buf->len;
+				if (addr32_last < rcd->addr) {
+					g_set_error (error,
+						     FWUPD_ERROR,
+						     FWUPD_ERROR_INVALID_FILE,
+						     "overflow from address 0x%x at line %u",
+						     (guint) rcd->addr, rcd->ln);
+					return FALSE;
+				}
 			}
 			data_cnt++;
 		}
@@ -387,10 +394,106 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 
 	/* add single image */
 	img_bytes = g_bytes_new (outbuf->data, outbuf->len);
-	fu_firmware_image_set_bytes (img, img_bytes);
-	fu_firmware_image_set_addr (img, img_address);
-	fu_firmware_add_image (firmware, img);
+	fu_firmware_set_bytes (firmware, img_bytes);
+	fu_firmware_set_addr (firmware, img_address);
 	return TRUE;
+}
+
+static void
+fu_srec_firmware_write_line (GString *str,
+			     FuFirmareSrecRecordKind kind,
+			     guint32 addr,
+			     const guint8 *buf,
+			     gsize bufsz)
+{
+	guint8 csum = 0;
+	g_autoptr(GByteArray) buf_addr = g_byte_array_new ();
+
+	if (kind == FU_FIRMWARE_SREC_RECORD_KIND_S0_HEADER ||
+	    kind == FU_FIRMWARE_SREC_RECORD_KIND_S1_DATA_16 ||
+	    kind == FU_FIRMWARE_SREC_RECORD_KIND_S5_COUNT_16 ||
+	    kind == FU_FIRMWARE_SREC_RECORD_KIND_S9_TERMINATION_16) {
+		fu_byte_array_append_uint16 (buf_addr, addr, G_BIG_ENDIAN);
+	} else if (kind == FU_FIRMWARE_SREC_RECORD_KIND_S2_DATA_24 ||
+		   kind == FU_FIRMWARE_SREC_RECORD_KIND_S6_COUNT_24 ||
+		   kind == FU_FIRMWARE_SREC_RECORD_KIND_S8_TERMINATION_24) {
+		fu_byte_array_append_uint32 (buf_addr, addr, G_BIG_ENDIAN);
+		g_byte_array_remove_index (buf_addr, 0);
+	} else if (kind == FU_FIRMWARE_SREC_RECORD_KIND_S3_DATA_32 ||
+		   kind == FU_FIRMWARE_SREC_RECORD_KIND_S7_COUNT_32) {
+		fu_byte_array_append_uint32 (buf_addr, addr, G_BIG_ENDIAN);
+	}
+
+	/* bytecount + address + data */
+	csum = buf_addr->len + bufsz + 1;
+	for (guint i = 0; i < buf_addr->len; i++)
+		csum += buf_addr->data[i];
+	for (guint i = 0; i < bufsz; i++)
+		csum += buf[i];
+	csum ^= 0xff;
+
+	/* output record */
+	g_string_append_printf (str, "S%X", kind);
+	g_string_append_printf (str, "%02X", (guint) (buf_addr->len + bufsz + 1));
+	for (guint i = 0; i < buf_addr->len; i++)
+		g_string_append_printf (str, "%02X", buf_addr->data[i]);
+	for (guint i = 0; i < bufsz; i++)
+		g_string_append_printf (str, "%02X", buf[i]);
+	g_string_append_printf (str, "%02X\n", csum);
+}
+
+static GBytes *
+fu_srec_firmware_write (FuFirmware *firmware, GError **error)
+{
+	g_autoptr(GString) str = g_string_new (NULL);
+	g_autoptr(GBytes) buf_blob = NULL;
+	const gchar *id = fu_firmware_get_id (firmware);
+	gsize id_strlen = id != NULL ? strlen (id) : 0;
+	FuFirmareSrecRecordKind kind_data = FU_FIRMWARE_SREC_RECORD_KIND_S1_DATA_16;
+	FuFirmareSrecRecordKind kind_coun = FU_FIRMWARE_SREC_RECORD_KIND_S5_COUNT_16;
+	FuFirmareSrecRecordKind kind_term = FU_FIRMWARE_SREC_RECORD_KIND_S9_TERMINATION_16;
+
+	/* upgrade to longer addresses? */
+	if (fu_firmware_get_addr (firmware) >= (1ull << 24)) {
+		kind_data = FU_FIRMWARE_SREC_RECORD_KIND_S3_DATA_32;
+		kind_coun = FU_FIRMWARE_SREC_RECORD_KIND_S6_COUNT_24;
+		kind_term = FU_FIRMWARE_SREC_RECORD_KIND_S7_COUNT_32;	/* intentional... */
+	} else if (fu_firmware_get_addr (firmware) >= (1ull << 16)) {
+		kind_data = FU_FIRMWARE_SREC_RECORD_KIND_S2_DATA_24;
+		kind_coun = FU_FIRMWARE_SREC_RECORD_KIND_S6_COUNT_24;
+		kind_term = FU_FIRMWARE_SREC_RECORD_KIND_S8_TERMINATION_24;
+	}
+
+	/* main blob */
+	buf_blob = fu_firmware_get_bytes (firmware, error);
+	if (buf_blob == NULL)
+		return NULL;
+
+	/* header */
+	fu_srec_firmware_write_line (str, FU_FIRMWARE_SREC_RECORD_KIND_S0_HEADER,
+				     0x0, (const guint8 *) id, id_strlen);
+
+	/* payload */
+	if (g_bytes_get_size (buf_blob) > 0) {
+		g_autoptr(GPtrArray) chunks = NULL;
+		chunks = fu_chunk_array_new_from_bytes (buf_blob,
+							fu_firmware_get_addr (firmware),
+							0x0, 64);
+		for (guint i = 0; i < chunks->len; i++) {
+			FuChunk *chk = g_ptr_array_index (chunks, i);
+			fu_srec_firmware_write_line (str, kind_data,
+						     fu_chunk_get_address (chk),
+						     fu_chunk_get_data (chk),
+						     fu_chunk_get_data_sz (chk));
+		}
+		fu_srec_firmware_write_line (str, kind_coun, chunks->len, NULL, 0);
+	}
+
+	/* EOF */
+	fu_srec_firmware_write_line (str, kind_term, 0x0, NULL, 0);
+
+	/* success */
+	return g_string_free_to_bytes (g_steal_pointer (&str));
 }
 
 static void
@@ -416,6 +519,7 @@ fu_srec_firmware_class_init (FuSrecFirmwareClass *klass)
 	object_class->finalize = fu_srec_firmware_finalize;
 	klass_firmware->parse = fu_srec_firmware_parse;
 	klass_firmware->tokenize = fu_srec_firmware_tokenize;
+	klass_firmware->write = fu_srec_firmware_write;
 }
 
 /**

@@ -39,8 +39,7 @@ fu_solokey_firmware_parse (FuFirmware *firmware,
 	JsonObject *json_obj;
 	const gchar *base64;
 	g_autoptr(FuFirmware) ihex_firmware = fu_ihex_firmware_new ();
-	g_autoptr(FuFirmwareImage) img = NULL;
-	g_autoptr(FuFirmwareImage) img_sig = fu_firmware_image_new (NULL);
+	g_autoptr(FuFirmware) img_sig = fu_firmware_new ();
 	g_autoptr(GBytes) fw_ihex = NULL;
 	g_autoptr(GBytes) fw_sig = NULL;
 	g_autoptr(GString) base64_websafe = NULL;
@@ -90,10 +89,11 @@ fu_solokey_firmware_parse (FuFirmware *firmware,
 	fw_ihex = _g_base64_decode_to_bytes (base64);
 	if (!fu_firmware_parse (ihex_firmware, fw_ihex, flags, error))
 		return FALSE;
-	img = fu_firmware_get_image_default (ihex_firmware, error);
-	if (img == NULL)
+	fw = fu_firmware_get_bytes (ihex_firmware, error);
+	if (fw == NULL)
 		return FALSE;
-	fu_firmware_add_image (firmware, img);
+	fu_firmware_set_addr (firmware, fu_firmware_get_addr (ihex_firmware));
+	fu_firmware_set_bytes (firmware, fw);
 
 	/* signature */
 	base64 = json_object_get_string_member (json_obj, "signature");
@@ -109,10 +109,57 @@ fu_solokey_firmware_parse (FuFirmware *firmware,
 	fu_common_string_replace (base64_websafe, "_", "/");
 	g_string_append (base64_websafe, "==");
 	fw_sig = _g_base64_decode_to_bytes (base64_websafe->str);
-	fu_firmware_image_set_bytes (img_sig, fw_sig);
-	fu_firmware_image_set_id (img_sig, FU_FIRMWARE_IMAGE_ID_SIGNATURE);
+	fu_firmware_set_bytes (img_sig, fw_sig);
+	fu_firmware_set_id (img_sig, FU_FIRMWARE_ID_SIGNATURE);
 	fu_firmware_add_image (firmware, img_sig);
 	return TRUE;
+}
+
+static GBytes *
+fu_solokey_firmware_write (FuFirmware *firmware, GError **error)
+{
+	g_autofree gchar *buf_base64 = NULL;
+	g_autoptr(FuFirmware) img = NULL;
+	g_autoptr(GByteArray) buf = g_byte_array_new ();
+	g_autoptr(GBytes) buf_blob = NULL;
+	g_autoptr(GString) str = g_string_new (NULL);
+	g_autoptr(JsonBuilder) builder = json_builder_new ();
+	g_autoptr(JsonGenerator) json_generator = json_generator_new ();
+	g_autoptr(JsonNode) json_root = NULL;
+
+	/* default image */
+	json_builder_begin_object (builder);
+	buf_blob = fu_firmware_get_bytes (firmware, error);
+	if (buf_blob == NULL)
+		return NULL;
+	buf_base64 = g_base64_encode ((const guchar *) g_bytes_get_data (buf_blob, NULL),
+				      g_bytes_get_size (buf_blob));
+	json_builder_set_member_name (builder, "firmware");
+	json_builder_add_string_value (builder, buf_base64);
+
+	/* optional signature */
+	img = fu_firmware_get_image_by_id (firmware, FU_FIRMWARE_ID_SIGNATURE, error);
+	if (img != NULL) {
+		g_autoptr(GBytes) sig_blob = NULL;
+		g_autofree gchar *sig_base64 = NULL;
+		sig_blob = fu_firmware_get_bytes (img, error);
+		if (sig_blob == NULL)
+			return NULL;
+		sig_base64 = g_base64_encode ((const guchar *) g_bytes_get_data (sig_blob, NULL),
+					      g_bytes_get_size (sig_blob));
+		json_builder_set_member_name (builder, "signature");
+		json_builder_add_string_value (builder, sig_base64);
+	}
+	json_builder_end_object (builder);
+
+	/* output as a string */
+	json_root = json_builder_get_root (builder);
+	json_generator_set_root (json_generator, json_root);
+	json_generator_to_gstring (json_generator, str);
+	g_string_append_c (str, '\n');
+
+	/* success */
+	return g_string_free_to_bytes (g_steal_pointer (&str));
 }
 
 static void
@@ -125,6 +172,7 @@ fu_solokey_firmware_class_init (FuSolokeyFirmwareClass *klass)
 {
 	FuFirmwareClass *klass_firmware = FU_FIRMWARE_CLASS (klass);
 	klass_firmware->parse = fu_solokey_firmware_parse;
+	klass_firmware->write = fu_solokey_firmware_write;
 }
 
 FuFirmware *

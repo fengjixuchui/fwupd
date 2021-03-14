@@ -713,7 +713,7 @@ fu_vli_usbhub_device_update_v1 (FuVliUsbhubDevice *self,
 	g_autoptr(GBytes) fw = NULL;
 
 	/* simple image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -815,7 +815,7 @@ fu_vli_usbhub_device_update_v2 (FuVliUsbhubDevice *self, FuFirmware *firmware, G
 	g_autoptr(GBytes) fw = NULL;
 
 	/* simple image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -975,7 +975,7 @@ static void
 fu_vli_usbhub_device_init (FuVliUsbhubDevice *self)
 {
 	fu_device_add_icon (FU_DEVICE (self), "audio-card");
-	fu_device_set_protocol (FU_DEVICE (self), "com.vli.usbhub");
+	fu_device_add_protocol (FU_DEVICE (self), "com.vli.usbhub");
 	fu_device_set_remove_delay (FU_DEVICE (self), FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
 }
 

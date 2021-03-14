@@ -246,7 +246,6 @@ fu_altos_device_write_firmware (FuDevice *device,
 	const gsize data_len;
 	guint flash_len;
 	g_autoptr(FuDeviceLocker) locker  = NULL;
-	g_autoptr(FuFirmwareImage) img = NULL;
 	g_autoptr(GBytes) fw = NULL;
 	g_autoptr(GString) buf = g_string_new (NULL);
 
@@ -278,25 +277,20 @@ fu_altos_device_write_firmware (FuDevice *device,
 		return FALSE;
 	}
 
-	/* load ihex blob */
-	img = fu_firmware_get_image_default (firmware, error);
-	if (img == NULL)
-		return FALSE;
-
 	/* check the start address */
-	if (fu_firmware_image_get_addr (img) != self->addr_base) {
+	if (fu_firmware_get_addr (firmware) != self->addr_base) {
 		g_set_error (error,
 			     FWUPD_ERROR,
 			     FWUPD_ERROR_INVALID_FILE,
 			     "start address not correct %" G_GUINT64_FORMAT ":"
 			     "%" G_GUINT64_FORMAT,
-			     fu_firmware_image_get_addr (img),
+			     fu_firmware_get_addr (firmware),
 			     self->addr_base);
 		return FALSE;
 	}
 
 	/* check firmware will fit */
-	fw = fu_firmware_image_write (img, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	data = g_bytes_get_data (fw, (gsize *) &data_len);
@@ -556,10 +550,11 @@ static void
 fu_altos_device_init (FuAltosDevice *self)
 {
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_internal_flag (FU_DEVICE (self), FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID);
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_TRIPLET);
 	fu_device_set_vendor (FU_DEVICE (self), "altusmetrum.org");
 	fu_device_set_summary (FU_DEVICE (self), "A USB hardware random number generator");
-	fu_device_set_protocol (FU_DEVICE (self), "org.altusmetrum.altos");
+	fu_device_add_protocol (FU_DEVICE (self), "org.altusmetrum.altos");
 
 	/* requires manual step */
 	if (!fu_device_has_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_IS_BOOTLOADER))

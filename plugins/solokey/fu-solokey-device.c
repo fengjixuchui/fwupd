@@ -411,7 +411,7 @@ fu_solokey_device_verify (FuSolokeyDevice *self, GBytes *fw_sig, GError **error)
 	g_autoptr(GByteArray) sig = g_byte_array_new ();
 
 	fu_device_set_status (FU_DEVICE (self), FWUPD_STATUS_DEVICE_VERIFY);
-	g_byte_array_append (sig, g_bytes_get_data (fw_sig, NULL), g_bytes_get_size (fw_sig));
+	fu_byte_array_append_bytes (sig, fw_sig);
 	fu_solokey_device_exchange (req, SOLO_BOOTLOADER_DONE, 0x00, sig);
 	res = fu_solokey_device_packet (self, SOLO_BOOTLOADER_HID_CMD_BOOT, req, error);
 	if (res == NULL)
@@ -438,22 +438,16 @@ fu_solokey_device_write_firmware (FuDevice *device,
 				  GError **error)
 {
 	FuSolokeyDevice *self = FU_SOLOKEY_DEVICE (device);
-	g_autoptr(FuFirmwareImage) img = NULL;
 	g_autoptr(GBytes) fw = NULL;
 	g_autoptr(GBytes) fw_sig = NULL;
 	g_autoptr(GPtrArray) chunks = NULL;
 
-	/* get main image */
-	img = fu_firmware_get_image_by_id (firmware, NULL, error);
-	if (img == NULL)
-		return FALSE;
-
 	/* build packets */
-	fw = fu_firmware_image_write (img, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	chunks = fu_chunk_array_new_from_bytes (fw,
-						fu_firmware_image_get_addr (img),
+						fu_firmware_get_addr (firmware),
 						0x00,	/* page_sz */
 						2048);
 
@@ -486,7 +480,7 @@ fu_solokey_device_write_firmware (FuDevice *device,
 
 	/* verify the signature and reboot back to runtime */
 	fw_sig = fu_firmware_get_image_by_id_bytes (firmware,
-						    FU_FIRMWARE_IMAGE_ID_SIGNATURE,
+						    FU_FIRMWARE_ID_SIGNATURE,
 						    error);
 	if (fw_sig == NULL)
 		return FALSE;
@@ -500,7 +494,7 @@ fu_solokey_device_init (FuSolokeyDevice *self)
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_set_remove_delay (FU_DEVICE (self), FU_DEVICE_REMOVE_DELAY_USER_REPLUG);
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_TRIPLET);
-	fu_device_set_protocol (FU_DEVICE (self), "com.solokeys");
+	fu_device_add_protocol (FU_DEVICE (self), "com.solokeys");
 	fu_device_set_name (FU_DEVICE (self), "Solo Secure");
 	fu_device_set_summary (FU_DEVICE (self), "An open source FIDO2 security key");
 	fu_device_add_icon (FU_DEVICE (self), "applications-internet");

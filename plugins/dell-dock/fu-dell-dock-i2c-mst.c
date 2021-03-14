@@ -753,7 +753,7 @@ fu_dell_dock_mst_write_fw (FuDevice *device,
 	g_return_val_if_fail (fu_device_get_proxy (device) != NULL, FALSE);
 
 	/* get default image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	data = g_bytes_get_data (fw, NULL);
@@ -965,7 +965,7 @@ fu_dell_dock_mst_close (FuDevice *device, GError **error)
 static void
 fu_dell_dock_mst_init (FuDellDockMst *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "com.synaptics.mst");
+	fu_device_add_protocol (FU_DEVICE (self), "com.synaptics.mst");
 }
 
 static void

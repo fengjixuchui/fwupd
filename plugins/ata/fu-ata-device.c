@@ -724,7 +724,7 @@ fu_ata_device_write_firmware (FuDevice *device,
 	g_autoptr(GPtrArray) chunks = NULL;
 
 	/* get default image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -826,7 +826,7 @@ fu_ata_device_init (FuAtaDevice *self)
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_set_summary (FU_DEVICE (self), "ATA Drive");
 	fu_device_add_icon (FU_DEVICE (self), "drive-harddisk");
-	fu_device_set_protocol (FU_DEVICE (self), "org.t13.ata");
+	fu_device_add_protocol (FU_DEVICE (self), "org.t13.ata");
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_PLAIN);
 	fu_udev_device_set_flags (FU_UDEV_DEVICE (self), FU_UDEV_DEVICE_FLAG_OPEN_READ);
 }

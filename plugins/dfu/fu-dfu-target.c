@@ -15,7 +15,7 @@
  * want to update one target on the device. Most users will want to
  * update all the targets on the device at the same time.
  *
- * See also: #FuDfuDevice, #FuFirmwareImage
+ * See also: #FuDfuDevice, #FuFirmware
  */
 
 #include "config.h"
@@ -674,44 +674,42 @@ fu_dfu_target_setup (FuDfuTarget *self, GError **error)
 	}
 
 	/* GD32VF103 devices features and peripheral list */
-	if (fu_device_has_custom_flag (device, "gd32")) {
+	if (priv->alt_setting == 0x0 &&
+	    fu_device_has_custom_flag (device, "gd32")) {
 		/*             RB R8 R6 R4  VB V8
 		 * Flash (KB) 128 64 32 16 128 64
 		 *             TB T8 T6 T4  CB C8 C6 C4
 		 * Flash (KB) 128 64 32 16 128 64 32 16
 		 */
-		guint flashsz = 0;
-		const gchar *chip_id = fu_dfu_device_get_chip_id (fu_dfu_target_get_device (self));
-		FuDfuSector *sector;
-		if (chip_id[1] == '2') {
-			flashsz = 8;
-		} else if (chip_id[1] == '4') {
-			flashsz = 16;
-		} else if (chip_id[1] == '6') {
-			flashsz = 32;
-		} else if (chip_id[1] == '8') {
-			flashsz = 64;
-		} else if (chip_id[1] == 'B') {
-			flashsz = 128;
-		} else if (chip_id[1] == 'D') {
-			flashsz = 256;
+		const gchar *serial = fu_device_get_serial (device);
+		if (serial == NULL || strlen (serial) < 4 || serial[3] != 'J') {
+			g_set_error (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_NOT_SUPPORTED,
+				     "GD32 serial number %s invalid",
+				     serial);
+			return FALSE;
+		}
+		if (serial[2] == '2') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/8*1Kg");
+		} else if (serial[2] == '4') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/16*1Kg");
+		} else if (serial[2] == '6') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/32*1Kg");
+		} else if (serial[2] == '8') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/64*1Kg");
+		} else if (serial[2] == 'B') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/128*1Kg");
+		} else if (serial[2] == 'D') {
+			fu_dfu_target_set_alt_name (self, "@Internal Flash  /0x8000000/256*1Kg");
 		} else {
 			g_set_error (error,
 				     FWUPD_ERROR,
 				     FWUPD_ERROR_NOT_SUPPORTED,
 				     "Unknown GD32 sector size: %c",
-				     chip_id[1]);
+				     serial[2]);
 			return FALSE;
 		}
-		g_debug ("using GD32 sector size of 0x%x", flashsz * 0x400);
-		sector = fu_dfu_sector_new (0x08000000, /* addr */
-					 flashsz * 0x400, /* size */
-					 flashsz * 0x400, /* size_left */
-					 0x0, /* zone */
-					 0x0, /* number */
-					 DFU_SECTOR_CAP_READABLE |
-					 DFU_SECTOR_CAP_WRITEABLE);
-		g_ptr_array_add (priv->sectors, sector);
 	}
 
 	/* get string */
@@ -1084,7 +1082,7 @@ fu_dfu_target_upload (FuDfuTarget *self,
 	guint16 zone_cur;
 	guint32 zone_size = 0;
 	guint32 zone_last = G_MAXUINT;
-	g_autoptr(FuFirmwareImage) image = NULL;
+	g_autoptr(FuFirmware) image = NULL;
 
 	g_return_val_if_fail (FU_IS_DFU_TARGET (self), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
@@ -1116,9 +1114,9 @@ fu_dfu_target_upload (FuDfuTarget *self,
 	}
 
 	/* create a new image */
-	image = fu_firmware_image_new (NULL);
-	fu_firmware_image_set_id (image, priv->alt_name);
-	fu_firmware_image_set_idx (image, priv->alt_setting);
+	image = fu_firmware_new ();
+	fu_firmware_set_id (image, priv->alt_name);
+	fu_firmware_set_idx (image, priv->alt_setting);
 
 	/* get all the sectors for the device */
 	for (guint i = 0; i < priv->sectors->len; i++) {
@@ -1147,7 +1145,7 @@ fu_dfu_target_upload (FuDfuTarget *self,
 			return FALSE;
 
 		/* this chunk was uploaded okay */
-		fu_firmware_image_add_chunk (image, chk);
+		fu_firmware_add_chunk (image, chk);
 	}
 
 	/* success */
@@ -1301,7 +1299,7 @@ fu_dfu_target_download_element (FuDfuTarget *self,
 /**
  * fu_dfu_target_download:
  * @self: a #FuDfuTarget
- * @image: a #FuFirmwareImage
+ * @image: a #FuFirmware
  * @flags: flags to use, e.g. %DFU_TARGET_TRANSFER_FLAG_VERIFY
  * @error: a #GError, or %NULL
  *
@@ -1312,7 +1310,7 @@ fu_dfu_target_download_element (FuDfuTarget *self,
  **/
 gboolean
 fu_dfu_target_download (FuDfuTarget *self,
-			FuFirmwareImage *image,
+			FuFirmware *image,
 			FuDfuTargetTransferFlags flags,
 			GError **error)
 {
@@ -1320,7 +1318,7 @@ fu_dfu_target_download (FuDfuTarget *self,
 	g_autoptr(GPtrArray) chunks = NULL;
 
 	g_return_val_if_fail (FU_IS_DFU_TARGET (self), FALSE);
-	g_return_val_if_fail (FU_IS_FIRMWARE_IMAGE (image), FALSE);
+	g_return_val_if_fail (FU_IS_FIRMWARE (image), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
 	/* ensure populated */
@@ -1341,7 +1339,7 @@ fu_dfu_target_download (FuDfuTarget *self,
 		return FALSE;
 
 	/* download all chunks in the image to the device */
-	chunks = fu_firmware_image_get_chunks (image, error);
+	chunks = fu_firmware_get_chunks (image, error);
 	if (chunks == NULL)
 		return FALSE;
 	if (chunks->len == 0) {

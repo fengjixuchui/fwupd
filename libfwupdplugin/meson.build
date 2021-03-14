@@ -13,10 +13,12 @@ fwupdplugin_src = [
   'fu-volume.c',            # fuzzing
   'fu-firmware.c',          # fuzzing
   'fu-firmware-common.c',   # fuzzing
-  'fu-firmware-image.c',    # fuzzing
   'fu-dfuse-firmware.c',    # fuzzing
   'fu-fmap-firmware.c',     # fuzzing
   'fu-hwids.c',
+  'fu-ifd-common.c',        # fuzzing
+  'fu-ifd-firmware.c',      # fuzzing
+  'fu-ifd-image.c',         # fuzzing
   'fu-ihex-firmware.c',     # fuzzing
   'fu-io-channel.c',        # fuzzing
   'fu-plugin.c',
@@ -49,10 +51,12 @@ fwupdplugin_headers = [
   'fu-volume.h',
   'fu-firmware.h',
   'fu-firmware-common.h',
-  'fu-firmware-image.h',
   'fu-fmap-firmware.h',
   'fu-dfuse-firmware.h',
   'fu-hwids.h',
+  'fu-ifd-common.h',
+  'fu-ifd-firmware.h',
+  'fu-ifd-image.h',
   'fu-ihex-firmware.h',
   'fu-io-channel.h',
   'fu-plugin.h',

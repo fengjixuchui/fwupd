@@ -224,9 +224,49 @@ gboolean	 fu_common_read_uint32_safe	(const guint8	*buf,
 						 FuEndianType	 endian,
 						 GError		**error)
 						 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_common_read_uint64_safe	(const guint8	*buf,
+						 gsize		 bufsz,
+						 gsize		 offset,
+						 guint64	*value,
+						 FuEndianType	 endian,
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_common_write_uint8_safe	(guint8		*buf,
+						 gsize		 bufsz,
+						 gsize		 offset,
+						 guint8		 value,
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_common_write_uint16_safe	(guint8		*buf,
+						 gsize		 bufsz,
+						 gsize		 offset,
+						 guint16	 value,
+						 FuEndianType	 endian,
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_common_write_uint32_safe	(guint8		*buf,
+						 gsize		 bufsz,
+						 gsize		 offset,
+						 guint32	 value,
+						 FuEndianType	 endian,
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_common_write_uint64_safe	(guint8		*buf,
+						 gsize		 bufsz,
+						 gsize		 offset,
+						 guint64	 value,
+						 FuEndianType	 endian,
+						 GError		**error)
+						 G_GNUC_WARN_UNUSED_RESULT;
 
 void		 fu_byte_array_set_size		(GByteArray	*array,
 						 guint		 length);
+void		 fu_byte_array_set_size_full	(GByteArray	*array,
+						 guint		 length,
+						 guint8		 data);
+void		 fu_byte_array_align_up		(GByteArray	*array,
+						 guint8		 alignment,
+						 guint8		 data);
 void		 fu_byte_array_append_uint8	(GByteArray	*array,
 						 guint8		 data);
 void		 fu_byte_array_append_uint16	(GByteArray	*array,
@@ -235,6 +275,11 @@ void		 fu_byte_array_append_uint16	(GByteArray	*array,
 void		 fu_byte_array_append_uint32	(GByteArray	*array,
 						 guint32	 data,
 						 FuEndianType	 endian);
+void		 fu_byte_array_append_uint64	(GByteArray	*array,
+						 guint64	 data,
+						 FuEndianType	 endian);
+void		 fu_byte_array_append_bytes	(GByteArray	*array,
+						 GBytes		*bytes);
 
 void		 fu_common_write_uint16		(guint8		*buf,
 						 guint16	 val_native,
@@ -242,9 +287,14 @@ void		 fu_common_write_uint16		(guint8		*buf,
 void		 fu_common_write_uint32		(guint8		*buf,
 						 guint32	 val_native,
 						 FuEndianType	 endian);
+void		 fu_common_write_uint64		(guint8		*buf,
+						 guint64	 val_native,
+						 FuEndianType	 endian);
 guint16		 fu_common_read_uint16		(const guint8	*buf,
 						 FuEndianType	 endian);
 guint32		 fu_common_read_uint32		(const guint8	*buf,
+						 FuEndianType	 endian);
+guint64		 fu_common_read_uint64		(const guint8	*buf,
 						 FuEndianType	 endian);
 
 guint		 fu_common_string_replace	(GString	*string,
@@ -282,8 +332,6 @@ gboolean	 fu_common_cpuid		(guint32	 leaf,
 						 guint32	*edx,
 						 GError		**error)
 						 G_GNUC_WARN_UNUSED_RESULT;
-gboolean	 fu_common_is_cpu_intel		(void)
-G_DEPRECATED_FOR(fu_common_get_cpu_vendor);
 FuCpuVendor	 fu_common_get_cpu_vendor	(void);
 gboolean	 fu_common_is_live_media	(void);
 guint64		 fu_common_get_memory_size	(void);
@@ -313,3 +361,5 @@ guint32		 fu_common_crc32_full		(const guint8	*buf,
 						 guint32	 crc,
 						 guint32	 polynomial);
 gchar		*fu_common_uri_get_scheme	(const gchar	*uri);
+gsize		 fu_common_align_up		(gsize		 value,
+						 guint8		 alignment);

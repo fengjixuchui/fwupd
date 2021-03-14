@@ -29,7 +29,7 @@ fu_uefi_dbx_device_write_firmware (FuDevice *device,
 	g_autoptr(GBytes) fw = NULL;
 
 	/* get default image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 
@@ -119,9 +119,9 @@ fu_uefi_dbx_device_probe (FuDevice *device, GError **error)
 		g_autofree gchar *devid1 = NULL;
 		g_autofree gchar *devid2 = NULL;
 
-		checksum = fu_firmware_image_get_checksum (FU_FIRMWARE_IMAGE (sig),
-							   G_CHECKSUM_SHA256,
-							   error);
+		checksum = fu_firmware_get_checksum (FU_FIRMWARE (sig),
+						     G_CHECKSUM_SHA256,
+						     error);
 		if (checksum == NULL)
 			return FALSE;
 		checksum_up = g_utf8_strup (checksum, -1);
@@ -141,7 +141,7 @@ fu_uefi_dbx_device_init (FuUefiDbxDevice *self)
 	fu_device_set_name (FU_DEVICE (self), "UEFI dbx");
 	fu_device_set_summary (FU_DEVICE (self), "UEFI Revocation Database");
 	fu_device_add_vendor_id (FU_DEVICE (self), "UEFI:Linux Foundation");
-	fu_device_set_protocol (FU_DEVICE (self), "org.uefi.dbx");
+	fu_device_add_protocol (FU_DEVICE (self), "org.uefi.dbx");
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_NUMBER);
 	fu_device_set_install_duration (FU_DEVICE (self), 1);
 	fu_device_add_icon (FU_DEVICE (self), "computer");

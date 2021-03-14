@@ -423,13 +423,11 @@ fu_ebitdo_device_write_firmware (FuDevice *device,
 
 	/* get header and payload */
 	fw_hdr = fu_firmware_get_image_by_id_bytes (firmware,
-						    FU_FIRMWARE_IMAGE_ID_HEADER,
+						    FU_FIRMWARE_ID_HEADER,
 						    error);
 	if (fw_hdr == NULL)
 		return FALSE;
-	fw_payload = fu_firmware_get_image_by_id_bytes (firmware,
-							FU_FIRMWARE_IMAGE_ID_PAYLOAD,
-							error);
+	fw_payload = fu_firmware_get_bytes (firmware, error);
 	if (fw_payload == NULL)
 		return FALSE;
 
@@ -596,8 +594,9 @@ fu_ebitdo_device_prepare_firmware (FuDevice *device,
 static void
 fu_ebitdo_device_init (FuEbitdoDevice *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "com.8bitdo");
+	fu_device_add_protocol (FU_DEVICE (self), "com.8bitdo");
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_ADD_COUNTERPART_GUIDS);
+	fu_device_add_internal_flag (FU_DEVICE (self), FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID);
 }
 
 static void

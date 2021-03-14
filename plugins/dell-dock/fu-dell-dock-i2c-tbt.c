@@ -69,7 +69,7 @@ fu_dell_dock_tbt_write_fw (FuDevice *device,
 	g_return_val_if_fail (FU_IS_FIRMWARE (firmware), FALSE);
 
 	/* get default image */
-	fw = fu_firmware_get_image_default_bytes (firmware, error);
+	fw = fu_firmware_get_bytes (firmware, error);
 	if (fw == NULL)
 		return FALSE;
 	buffer = g_bytes_get_data (fw, &image_size);
@@ -276,7 +276,7 @@ fu_dell_dock_tbt_finalize (GObject *object)
 static void
 fu_dell_dock_tbt_init (FuDellDockTbt *self)
 {
-	fu_device_set_protocol (FU_DEVICE (self), "com.intel.thunderbolt");
+	fu_device_add_protocol (FU_DEVICE (self), "com.intel.thunderbolt");
 }
 
 static void
