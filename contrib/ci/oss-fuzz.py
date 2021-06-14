@@ -119,14 +119,7 @@ class Builder:
         if not os.path.exists(fullsrc):
             fullsrc = os.path.join(self.builddir, src)
         dst = os.path.basename(src).replace(".c", ".o")
-        argv.extend(
-            [
-                "-c",
-                fullsrc,
-                "-o",
-                os.path.join(self.builddir, dst),
-            ]
-        )
+        argv.extend(["-c", fullsrc, "-o", os.path.join(self.builddir, dst)])
         print("building {} into {}".format(src, dst))
         try:
             subprocess.run(argv, cwd=self.srcdir, check=True)
@@ -169,11 +162,9 @@ class Builder:
 
     def makezip(self, dst: str, globstr: str) -> None:
         """ create a zip file archive from a glob """
-        argv = [
-            "zip",
-            "--junk-paths",
-            os.path.join(self.installdir, dst),
-        ] + glob.glob(os.path.join(self.srcdir, globstr))
+        argv = ["zip", "--junk-paths", os.path.join(self.installdir, dst)] + glob.glob(
+            os.path.join(self.srcdir, globstr)
+        )
         print("assembling {}".format(dst))
         subprocess.run(argv, cwd=self.srcdir, check=True)
 
@@ -184,17 +175,40 @@ class Builder:
             for line in f.read().split("\n"):
                 if line.find(token) == -1:
                     continue
-                srcs.append(
-                    os.path.join(
-                        src,
-                        line.strip()
-                        .replace("'", "")
-                        .replace(",", "")
-                        .replace(" ", "")
-                        .split("#")[0],
-                    )
-                )
+
+                # get rid of token
+                line = line.split("#")[0]
+
+                # get rid of variable
+                try:
+                    line = line.split("=")[1]
+                except IndexError as _:
+                    pass
+
+                # get rid of whitespace
+                for char in ["'", ",", " "]:
+                    line = line.replace(char, "")
+
+                # all done
+                srcs.append(os.path.join(src, line))
         return srcs
+
+
+class Fuzzer:
+    def __init__(self, name, srcdir=None, globstr=None, pattern=None) -> None:
+
+        self.name = name
+        self.srcdir = srcdir or name
+        self.globstr = globstr or "{}*".format(name)
+        self.pattern = pattern or "{}-firmware".format(name)
+
+    @property
+    def new_gtype(self) -> str:
+        return "fu_{}_new".format(self.pattern).replace("-", "_")
+
+    @property
+    def header(self) -> str:
+        return "fu-{}.h".format(self.pattern)
 
 
 def _build(bld: Builder) -> None:
@@ -223,16 +237,10 @@ def _build(bld: Builder) -> None:
 
     # JSON-GLib
     src = bld.checkout_source(
-        "json-glib",
-        url="https://gitlab.gnome.org/GNOME/json-glib.git",
+        "json-glib", url="https://gitlab.gnome.org/GNOME/json-glib.git"
     )
     bld.build_meson_project(
-        src,
-        [
-            "-Dgtk_doc=disabled",
-            "-Dtests=false",
-            "-Dintrospection=disabled",
-        ],
+        src, ["-Dgtk_doc=disabled", "-Dtests=false", "-Dintrospection=disabled"]
     )
     bld.add_work_includedir("include/json-glib-1.0/json-glib")
     bld.add_work_includedir("include/json-glib-1.0")
@@ -241,12 +249,7 @@ def _build(bld: Builder) -> None:
     # libxmlb
     src = bld.checkout_source("libxmlb", url="https://github.com/hughsie/libxmlb.git")
     bld.build_meson_project(
-        src,
-        [
-            "-Dgtkdoc=false",
-            "-Dintrospection=false",
-            "-Dtests=false",
-        ],
+        src, ["-Dgtkdoc=false", "-Dintrospection=false", "-Dtests=false"]
     )
     bld.add_work_includedir("include/libxmlb-2")
     bld.add_work_includedir("include/libxmlb-2/libxmlb")
@@ -282,51 +285,55 @@ def _build(bld: Builder) -> None:
         built_objs.append(bld.compile("fwupd/libfwupdplugin/fu-fuzzer-main.c"))
 
     # built in formats
-    for fuzzer in ["dfuse", "fmap", "ifd", "ihex", "srec"]:
+    for fzr in [Fuzzer("dfuse"), Fuzzer("fmap"), Fuzzer("ihex"), Fuzzer("srec")]:
         src = bld.substitute(
             "fwupd/libfwupdplugin/fu-fuzzer-firmware.c.in",
             {
-                "@FIRMWARENEW@": "fu_{}_firmware_new".format(fuzzer),
-                "@INCLUDE@": "libfwupdplugin/fu-{}-firmware.h".format(fuzzer),
+                "@FIRMWARENEW@": fzr.new_gtype,
+                "@INCLUDE@": os.path.join("libfwupdplugin", fzr.header),
             },
         )
-        bld.link([bld.compile(src)] + built_objs, "{}_fuzzer".format(fuzzer))
+        bld.link([bld.compile(src)] + built_objs, "{}_fuzzer".format(fzr.name))
         bld.makezip(
-            "{}_fuzzer_seed_corpus.zip".format(fuzzer),
-            "fwupd/src/fuzzing/firmware/{}*".format(fuzzer),
+            "{}_fuzzer_seed_corpus.zip".format(fzr.name),
+            "fwupd/src/fuzzing/firmware/{}".format(fzr.globstr),
         )
 
     # plugins
-    for srcdir, fuzzer, globstr in [
-        ("bcm57xx", "bcm57xx", "bcm57xx*"),
-        ("ccgx", "ccgx", "ccgx*.cyacd"),
-        ("ccgx", "ccgx-dmc", "ccgx-dmc*.bin"),
-        ("cros-ec", "cros-ec", "cros-ec*"),
-        ("ebitdo", "ebitdo", "ebitdo*"),
-        ("elantp", "elantp", "elantp*"),
-        ("hailuck", "hailuck-kbd", "ihex*"),
-        ("pixart-rf", "pxi", "pixart*"),
-        ("solokey", "solokey", "solokey*"),
-        ("synaptics-prometheus", "synaprom", "synaprom*"),
-        ("synaptics-rmi", "synaptics-rmi", "synaptics-rmi*"),
-        ("synaptics-mst", "synaptics-mst", "synaptics-mst*"),
-        ("wacom-usb", "wac", "wacom*"),
+    for fzr in [
+        Fuzzer("acpi-phat", pattern="acpi-phat"),
+        Fuzzer("bcm57xx"),
+        Fuzzer("ccgx-dmc", srcdir="ccgx", globstr="ccgx-dmc*.bin"),
+        Fuzzer("ccgx", globstr="ccgx*.cyacd"),
+        Fuzzer("cros-ec"),
+        Fuzzer("ebitdo"),
+        Fuzzer("efi-filesystem", srcdir="intel-spi", pattern="efi-firmware-filesystem"),
+        Fuzzer("efi-volume", srcdir="intel-spi", pattern="efi-firmware-volume"),
+        Fuzzer("elantp"),
+        Fuzzer("hailuck-kbd", srcdir="hailuck", globstr="ihex*"),
+        Fuzzer("ifd", srcdir="intel-spi"),
+        Fuzzer("pixart", srcdir="pixart-rf", pattern="pxi-firmware"),
+        Fuzzer("solokey"),
+        Fuzzer("synaprom", srcdir="synaptics-prometheus"),
+        Fuzzer("synaptics-mst"),
+        Fuzzer("synaptics-rmi"),
+        Fuzzer("wacom-usb", pattern="wac-firmware", globstr="wacom*"),
     ]:
         fuzz_objs = []
-        for obj in bld.grep_meson("fwupd/plugins/{}".format(srcdir)):
+        for obj in bld.grep_meson("fwupd/plugins/{}".format(fzr.srcdir)):
             fuzz_objs.append(bld.compile(obj))
         src = bld.substitute(
             "fwupd/libfwupdplugin/fu-fuzzer-firmware.c.in",
             {
-                "@FIRMWARENEW@": "fu_{}_firmware_new".format(fuzzer.replace("-", "_")),
-                "@INCLUDE@": "plugins/{}/fu-{}-firmware.h".format(srcdir, fuzzer),
+                "@FIRMWARENEW@": fzr.new_gtype,
+                "@INCLUDE@": os.path.join("plugins", fzr.srcdir, fzr.header),
             },
         )
         fuzz_objs.append(bld.compile(src))
-        bld.link(fuzz_objs + built_objs, "{}_fuzzer".format(fuzzer))
+        bld.link(fuzz_objs + built_objs, "{}_fuzzer".format(fzr.name))
         bld.makezip(
-            "{}_fuzzer_seed_corpus.zip".format(fuzzer),
-            "fwupd/src/fuzzing/firmware/{}".format(globstr),
+            "{}_fuzzer_seed_corpus.zip".format(fzr.name),
+            "fwupd/src/fuzzing/firmware/{}".format(fzr.globstr),
         )
 
 

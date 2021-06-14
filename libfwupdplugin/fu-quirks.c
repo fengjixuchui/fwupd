@@ -22,8 +22,7 @@
 #include "fwupd-remote-private.h"
 
 /**
- * SECTION:fu-quirks
- * @short_description: device quirks
+ * FuQuirks:
  *
  * Quirks can be used to modify device behavior.
  * When fwupd is installed in long-term support distros it's very hard to
@@ -43,7 +42,7 @@
  * obviously need code changes, but allows us to get most existing devices working
  * in an easy way without the user compiling anything.
  *
- * See also: #FuDevice, #FuPlugin
+ * See also: [class@FuDevice], [class@FuPlugin]
  */
 
 static void fu_quirks_finalize	 (GObject *obj);
@@ -68,8 +67,8 @@ fu_quirks_build_group_key (const gchar *group)
 	for (guint i = 0; guid_prefixes[i] != NULL; i++) {
 		if (g_str_has_prefix (group, guid_prefixes[i])) {
 			gsize len = strlen (guid_prefixes[i]);
-			g_warning ("using %s in quirk files is deprecated!",
-				   guid_prefixes[i]);
+			g_warning ("using %s for %s in quirk files is deprecated!",
+				   guid_prefixes[i], group);
 			if (fwupd_guid_is_valid (group + len))
 				return g_strdup (group + len);
 			return fwupd_guid_hash_string (group + len);
@@ -132,7 +131,8 @@ fu_quirks_convert_quirk_to_xml_cb (XbBuilderSource *source,
 			g_autofree gchar *value = NULL;
 
 			/* sanity check key */
-			if (g_hash_table_lookup (self->possible_keys, keys[j]) == NULL) {
+			if ((self->load_flags & FU_QUIRKS_LOAD_FLAG_NO_VERIFY) == 0 &&
+			    g_hash_table_lookup (self->possible_keys, keys[j]) == NULL) {
 				if (!g_ptr_array_find_with_equal_func (self->invalid_keys,
 								       keys[j],
 								       g_str_equal,
@@ -237,10 +237,8 @@ static gboolean
 fu_quirks_check_silo (FuQuirks *self, GError **error)
 {
 	XbBuilderCompileFlags compile_flags = XB_BUILDER_COMPILE_FLAG_WATCH_BLOB;
-	g_autofree gchar *cachedirpkg = NULL;
 	g_autofree gchar *datadir = NULL;
 	g_autofree gchar *localstatedir = NULL;
-	g_autofree gchar *xmlbfn = NULL;
 	g_autoptr(GFile) file = NULL;
 	g_autoptr(XbBuilder) builder = NULL;
 
@@ -260,9 +258,16 @@ fu_quirks_check_silo (FuQuirks *self, GError **error)
 		return FALSE;
 
 	/* load silo */
-	cachedirpkg = fu_common_get_path (FU_PATH_KIND_CACHEDIR_PKG);
-	xmlbfn = g_build_filename (cachedirpkg, "quirks.xmlb", NULL);
-	file = g_file_new_for_path (xmlbfn);
+	if (self->load_flags & FU_QUIRKS_LOAD_FLAG_NO_CACHE) {
+		g_autoptr(GFileIOStream) iostr = NULL;
+		file = g_file_new_tmp (NULL, &iostr, error);
+		if (file == NULL)
+			return FALSE;
+	} else {
+		g_autofree gchar *cachedirpkg = fu_common_get_path (FU_PATH_KIND_CACHEDIR_PKG);
+		g_autofree gchar *xmlbfn = g_build_filename (cachedirpkg, "quirks.xmlb", NULL);
+		file = g_file_new_for_path (xmlbfn);
+	}
 	if (g_getenv ("FWUPD_XMLB_VERBOSE") != NULL) {
 		xb_builder_set_profile_flags (builder,
 					      XB_SILO_PROFILE_FLAG_XPATH |
@@ -288,9 +293,9 @@ fu_quirks_check_silo (FuQuirks *self, GError **error)
 
 /**
  * fu_quirks_lookup_by_id:
- * @self: A #FuPlugin
- * @group: A string group, e.g. "DeviceInstanceId=USB\VID_1235&PID_AB11"
- * @key: An ID to match the entry, e.g. "Name"
+ * @self: a #FuQuirks
+ * @group: a string group, e.g. `DeviceInstanceId=USB\VID_1235&PID_AB11`
+ * @key: an ID to match the entry, e.g. `Name`
  *
  * Looks up an entry in the hardware database using a string value.
  *
@@ -363,9 +368,9 @@ fu_quirks_lookup_by_id (FuQuirks *self, const gchar *group, const gchar *key)
 
 /**
  * fu_quirks_lookup_by_id_iter:
- * @self: A #FuQuirks
+ * @self: a #FuQuirks
  * @group: string of group to lookup
- * @iter_cb: (scope async): A #FuQuirksIter
+ * @iter_cb: (scope async): a function to call for each result
  * @user_data: user data passed to @iter_cb
  *
  * Looks up all entries in the hardware database using a GUID value.
@@ -442,9 +447,9 @@ fu_quirks_lookup_by_id_iter (FuQuirks *self, const gchar *group,
 
 /**
  * fu_quirks_load: (skip)
- * @self: A #FuQuirks
- * @load_flags: A #FuQuirksLoadFlags
- * @error: A #GError, or %NULL
+ * @self: a #FuQuirks
+ * @load_flags: load flags
+ * @error: (nullable): optional return location for an error
  *
  * Loads the various files that define the hardware quirks used in plugins.
  *
@@ -463,8 +468,8 @@ fu_quirks_load (FuQuirks *self, FuQuirksLoadFlags load_flags, GError **error)
 
 /**
  * fu_quirks_add_possible_key:
- * @self: A #FuQuirks
- * @possible_key: A key name, e.g. `Flags`
+ * @self: a #FuQuirks
+ * @possible_key: a key name, e.g. `Flags`
  *
  * Adds a possible quirk key. If added by a plugin it should be namespaced
  * using the plugin name, where possible.
@@ -510,6 +515,7 @@ fu_quirks_init (FuQuirks *self)
 	fu_quirks_add_possible_key (self, FU_QUIRKS_PRIORITY);
 	fu_quirks_add_possible_key (self, FU_QUIRKS_PROTOCOL);
 	fu_quirks_add_possible_key (self, FU_QUIRKS_PROXY_GUID);
+	fu_quirks_add_possible_key (self, FU_QUIRKS_BATTERY_THRESHOLD);
 	fu_quirks_add_possible_key (self, FU_QUIRKS_REMOVE_DELAY);
 	fu_quirks_add_possible_key (self, FU_QUIRKS_SUMMARY);
 	fu_quirks_add_possible_key (self, FU_QUIRKS_UPDATE_IMAGE);
@@ -536,7 +542,7 @@ fu_quirks_finalize (GObject *obj)
  *
  * Creates a new quirks object.
  *
- * Return value: a new #FuQuirks
+ * Returns: a new #FuQuirks
  *
  * Since: 1.0.1
  **/

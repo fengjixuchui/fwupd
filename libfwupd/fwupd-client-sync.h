@@ -8,6 +8,8 @@
 
 #include "fwupd-client.h"
 
+G_BEGIN_DECLS
+
 gboolean	 fwupd_client_connect			(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GError		**error)
@@ -119,7 +121,6 @@ gboolean	 fwupd_client_install_release		(FwupdClient	*self,
 							 FwupdInstallFlags install_flags,
 							 GCancellable	*cancellable,
 							 GError		**error)
-							 G_GNUC_WARN_UNUSED_RESULT
 G_DEPRECATED_FOR(fwupd_client_install_release2);
 gboolean	 fwupd_client_install_release2		(FwupdClient	*self,
 							 FwupdDevice	*device,
@@ -225,3 +226,5 @@ GBytes		*fwupd_client_upload_bytes		(FwupdClient	*self,
 							 GCancellable	*cancellable,
 							 GError		**error)
 							 G_GNUC_WARN_UNUSED_RESULT;
+
+G_END_DECLS

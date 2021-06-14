@@ -7,10 +7,8 @@
 
 #include "config.h"
 
+#include <fwupdplugin.h>
 #include <string.h>
-
-#include "fu-chunk.h"
-#include "fu-srec-firmware.h"
 
 #include "fu-synaptics-cxaudio-common.h"
 #include "fu-synaptics-cxaudio-device.h"
@@ -81,7 +79,7 @@ fu_synaptics_cxaudio_device_input_report (FuSynapticsCxaudioDevice *self,
 	return fu_hid_device_get_report (FU_HID_DEVICE (self), ReportID,
 					 buf, bufsz,
 					 FU_SYNAPTICS_CXAUDIO_USB_TIMEOUT,
-					 FU_HID_DEVICE_FLAG_NONE,
+					 FU_HID_DEVICE_FLAG_RETRY_FAILURE,
 					 error);
 }
 

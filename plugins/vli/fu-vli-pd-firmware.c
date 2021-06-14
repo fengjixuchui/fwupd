@@ -7,7 +7,7 @@
 
 #include "config.h"
 
-#include "fu-common.h"
+#include <fwupdplugin.h>
 
 #include "fu-vli-pd-common.h"
 #include "fu-vli-pd-firmware.h"
@@ -50,19 +50,21 @@ fu_vli_pd_firmware_validate_header (FuVliPdFirmware *self)
 		return TRUE;
 	if (GUINT16_FROM_LE (self->hdr.vid) == 0x2D01)
 		return TRUE;
+	if (GUINT16_FROM_LE (self->hdr.vid) == 0x06C4)
+		return TRUE;
 	return FALSE;
 }
 
 static void
-fu_vli_pd_firmware_to_string (FuFirmware *firmware, guint idt, GString *str)
+fu_vli_pd_firmware_export (FuFirmware *firmware,
+			   FuFirmwareExportFlags flags,
+			   XbBuilderNode *bn)
 {
 	FuVliPdFirmware *self = FU_VLI_PD_FIRMWARE (firmware);
-	fu_common_string_append_kv (str, idt, "DeviceKind",
-				    fu_vli_common_device_kind_to_string (self->device_kind));
-	fu_common_string_append_kx (str, idt, "VID",
-				    fu_vli_pd_firmware_get_vid (self));
-	fu_common_string_append_kx (str, idt, "PID",
-				    fu_vli_pd_firmware_get_pid (self));
+	fu_xmlb_builder_insert_kv (bn, "device_kind",
+				   fu_vli_common_device_kind_to_string (self->device_kind));
+	fu_xmlb_builder_insert_kx (bn, "vid", fu_vli_pd_firmware_get_vid (self));
+	fu_xmlb_builder_insert_kx (bn, "pid", fu_vli_pd_firmware_get_pid (self));
 }
 
 static gboolean
@@ -167,7 +169,7 @@ fu_vli_pd_firmware_class_init (FuVliPdFirmwareClass *klass)
 {
 	FuFirmwareClass *klass_firmware = FU_FIRMWARE_CLASS (klass);
 	klass_firmware->parse = fu_vli_pd_firmware_parse;
-	klass_firmware->to_string = fu_vli_pd_firmware_to_string;
+	klass_firmware->export = fu_vli_pd_firmware_export;
 }
 
 FuFirmware *

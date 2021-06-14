@@ -7,6 +7,7 @@
 #pragma once
 
 #include <gio/gio.h>
+#include <xmlb.h>
 
 #include "fu-volume.h"
 
@@ -40,6 +41,11 @@ typedef enum {
 	FU_DUMP_FLAGS_LAST
 } FuDumpFlags;
 
+/**
+ * FuEndianType:
+ *
+ * The endian type, e.g. %G_LITTLE_ENDIAN
+ **/
 typedef guint FuEndianType;
 
 /**
@@ -60,6 +66,7 @@ typedef guint FuEndianType;
  * @FU_PATH_KIND_OFFLINE_TRIGGER:	The file for the offline trigger (IE /system-update)
  * @FU_PATH_KIND_SYSFSDIR_SECURITY:	The sysfs security location (IE /sys/kernel/security)
  * @FU_PATH_KIND_ACPI_TABLES:		The location of the ACPI tables
+ * @FU_PATH_KIND_LOCKDIR:		The lock directory (IE /run/lock)
  *
  * Path types to use when dynamically determining a path at runtime
  **/
@@ -80,6 +87,7 @@ typedef enum {
 	FU_PATH_KIND_OFFLINE_TRIGGER,
 	FU_PATH_KIND_SYSFSDIR_SECURITY,
 	FU_PATH_KIND_ACPI_TABLES,
+	FU_PATH_KIND_LOCKDIR,
 	/*< private >*/
 	FU_PATH_KIND_LAST
 } FuPathKind;
@@ -100,6 +108,41 @@ typedef enum {
 	FU_CPU_VENDOR_LAST
 } FuCpuVendor;
 
+/**
+ * FU_BATTERY_VALUE_INVALID:
+ *
+ * This value signifies the battery level is either unset, or the value cannot
+ * be discovered.
+ */
+#define FU_BATTERY_VALUE_INVALID			101
+
+/**
+ * FuBatteryState:
+ * @FU_BATTERY_STATE_UNKNOWN:		Unknown
+ * @FU_BATTERY_STATE_CHARGING:		Charging
+ * @FU_BATTERY_STATE_DISCHARGING:	Discharging
+ * @FU_BATTERY_STATE_EMPTY:		Empty
+ * @FU_BATTERY_STATE_FULLY_CHARGED:	Fully charged
+ *
+ * The device battery state.
+ **/
+typedef enum {
+	FU_BATTERY_STATE_UNKNOWN,
+	FU_BATTERY_STATE_CHARGING,
+	FU_BATTERY_STATE_DISCHARGING,
+	FU_BATTERY_STATE_EMPTY,
+	FU_BATTERY_STATE_FULLY_CHARGED,
+	/*< private >*/
+	FU_BATTERY_STATE_LAST
+} FuBatteryState;
+
+/**
+ * FuOutputHandler:
+ * @line: text data
+ * @user_data: user data
+ *
+ * The process spawn iteration callback.
+ */
 typedef void	(*FuOutputHandler)		(const gchar	*line,
 						 gpointer	 user_data);
 
@@ -172,6 +215,9 @@ void		 fu_common_dump_bytes		(const gchar	*log_domain,
 GBytes		*fu_common_bytes_align		(GBytes		*bytes,
 						 gsize		 blksz,
 						 gchar		 padval);
+const guint8	*fu_bytes_get_data_safe		(GBytes		*bytes,
+						 gsize		*bufsz,
+						 GError		**error);
 gboolean	 fu_common_bytes_is_empty	(GBytes		*bytes);
 gboolean	 fu_common_bytes_compare	(GBytes		*bytes1,
 						 GBytes		*bytes2,
@@ -363,3 +409,14 @@ guint32		 fu_common_crc32_full		(const guint8	*buf,
 gchar		*fu_common_uri_get_scheme	(const gchar	*uri);
 gsize		 fu_common_align_up		(gsize		 value,
 						 guint8		 alignment);
+const gchar	*fu_battery_state_to_string	(FuBatteryState	 battery_state);
+
+void		 fu_xmlb_builder_insert_kv	(XbBuilderNode	*bn,
+						 const gchar	*key,
+						 const gchar	*value);
+void		 fu_xmlb_builder_insert_kx	(XbBuilderNode	*bn,
+						 const gchar	*key,
+						 guint64	 value);
+void		 fu_xmlb_builder_insert_kb	(XbBuilderNode	*bn,
+						 const gchar	*key,
+						 gboolean	 value);

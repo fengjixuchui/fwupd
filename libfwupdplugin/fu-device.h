@@ -9,9 +9,10 @@
 #include <glib-object.h>
 #include <fwupd.h>
 
+#include "fu-context.h"
 #include "fu-firmware.h"
-#include "fu-quirks.h"
 #include "fu-common-version.h"
+#include "fu-security-attrs.h"
 
 #define FU_TYPE_DEVICE (fu_device_get_type ())
 G_DECLARE_DERIVABLE_TYPE (FuDevice, fu_device, FU, DEVICE, FwupdDevice)
@@ -19,6 +20,7 @@ G_DECLARE_DERIVABLE_TYPE (FuDevice, fu_device, FU, DEVICE, FwupdDevice)
 struct _FuDeviceClass
 {
 	FwupdDeviceClass	 parent_class;
+#ifndef __GI_SCANNER__
 	void			 (*to_string)		(FuDevice	*self,
 							 guint		 indent,
 							 GString	*str);
@@ -95,8 +97,11 @@ struct _FuDeviceClass
 	GBytes			*(*dump_firmware)	(FuDevice	*self,
 							 GError		**error)
 							 G_GNUC_WARN_UNUSED_RESULT;
+	void			 (*add_security_attrs)	(FuDevice	*self,
+							 FuSecurityAttrs *attrs);
 	/*< private >*/
-	gpointer	padding[11];
+	gpointer	padding[10];
+#endif
 };
 
 /**
@@ -131,7 +136,17 @@ typedef enum {
  */
 #define FU_DEVICE_REMOVE_DELAY_USER_REPLUG		40000
 
-typedef gboolean (*FuDeviceRetryFunc)			(FuDevice	*device,
+/**
+ * FuDeviceRetryFunc:
+ * @self: a #FuDevice
+ * @user_data: user data
+ * @error: (nullable): optional return location for an error
+ *
+ * The device retry iteration callback.
+ *
+ * Returns: %TRUE on success
+ */
+typedef gboolean (*FuDeviceRetryFunc)			(FuDevice	*self,
 							 gpointer	 user_data,
 							 GError		**error)
 							 G_GNUC_WARN_UNUSED_RESULT;
@@ -139,7 +154,6 @@ typedef gboolean (*FuDeviceRetryFunc)			(FuDevice	*device,
 FuDevice	*fu_device_new				(void);
 
 /* helpful casting macros */
-#define fu_device_remove_flag(d,v)		fwupd_device_remove_flag(FWUPD_DEVICE(d),v)
 #define fu_device_has_flag(d,v)			fwupd_device_has_flag(FWUPD_DEVICE(d),v)
 #define fu_device_has_instance_id(d,v)		fwupd_device_has_instance_id(FWUPD_DEVICE(d),v)
 #define fu_device_has_vendor_id(d,v)		fwupd_device_has_vendor_id(FWUPD_DEVICE(d),v)
@@ -180,6 +194,7 @@ FuDevice	*fu_device_new				(void);
 #define fu_device_get_summary(d)		fwupd_device_get_summary(FWUPD_DEVICE(d))
 #define fu_device_get_branch(d)			fwupd_device_get_branch(FWUPD_DEVICE(d))
 #define fu_device_get_id(d)			fwupd_device_get_id(FWUPD_DEVICE(d))
+#define fu_device_get_composite_id(d)		fwupd_device_get_composite_id(FWUPD_DEVICE(d))
 #define fu_device_get_plugin(d)			fwupd_device_get_plugin(FWUPD_DEVICE(d))
 #define fu_device_get_update_error(d)		fwupd_device_get_update_error(FWUPD_DEVICE(d))
 #define fu_device_get_update_state(d)		fwupd_device_get_update_state(FWUPD_DEVICE(d))
@@ -208,6 +223,8 @@ FuDevice	*fu_device_new				(void);
  * @FU_DEVICE_INTERNAL_FLAG_MD_SET_ICON:		Set the device icon from the metadata if available
  * @FU_DEVICE_INTERNAL_FLAG_RETRY_OPEN:			Retry the device open up to 5 times if it fails
  * @FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID:		Match GUIDs on device replug where the physical and logical IDs will be different
+ * @FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION:		Inherit activation status from the history database on startup
+ * @FU_DEVICE_INTERNAL_FLAG_IS_OPEN:			The device opened successfully and ready to use
  *
  * The device internal flags.
  **/
@@ -222,6 +239,8 @@ typedef enum {
 	FU_DEVICE_INTERNAL_FLAG_MD_SET_ICON		= (1llu << 6),	/* Since: 1.5.5 */
 	FU_DEVICE_INTERNAL_FLAG_RETRY_OPEN		= (1llu << 7),	/* Since: 1.5.5 */
 	FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID	= (1llu << 8),	/* Since: 1.5.8 */
+	FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION	= (1llu << 9),  /* Since: 1.5.9 */
+	FU_DEVICE_INTERNAL_FLAG_IS_OPEN			= (1llu << 10),	/* Since: 1.6.1 */
 	/*< private >*/
 	FU_DEVICE_INTERNAL_FLAG_UNKNOWN			= G_MAXUINT64,
 } FuDeviceInternalFlags;
@@ -283,6 +302,11 @@ void		 fu_device_set_version_lowest		(FuDevice	*self,
 							 const gchar	*version);
 void		 fu_device_set_version_bootloader	(FuDevice	*self,
 							 const gchar	*version);
+void		 fu_device_inhibit			(FuDevice	*self,
+							 const gchar	*inhibit_id,
+							 const gchar	*reason);
+void		 fu_device_uninhibit			(FuDevice	*self,
+							 const gchar	*inhibit_id);
 const gchar	*fu_device_get_physical_id		(FuDevice	*self);
 void		 fu_device_set_physical_id		(FuDevice	*self,
 							 const gchar	*physical_id);
@@ -299,6 +323,8 @@ guint		 fu_device_get_priority			(FuDevice	*self);
 void		 fu_device_set_priority			(FuDevice	*self,
 							 guint		 priority);
 void		 fu_device_add_flag			(FuDevice	*self,
+							 FwupdDeviceFlags flag);
+void		 fu_device_remove_flag			(FuDevice	*self,
 							 FwupdDeviceFlags flag);
 const gchar	*fu_device_get_custom_flags		(FuDevice	*self);
 gboolean	 fu_device_has_custom_flag		(FuDevice	*self,
@@ -327,14 +353,17 @@ void		 fu_device_set_progress			(FuDevice	*self,
 guint		 fu_device_get_battery_level		(FuDevice	*self);
 void		 fu_device_set_battery_level		(FuDevice	*self,
 							 guint		 battery_level);
+guint		 fu_device_get_battery_threshold	(FuDevice	*self);
+void		 fu_device_set_battery_threshold	(FuDevice	*self,
+							 guint		 battery_threshold);
 void		 fu_device_set_progress_full		(FuDevice	*self,
 							 gsize		 progress_done,
 							 gsize		 progress_total);
 void		 fu_device_sleep_with_progress		(FuDevice	*self,
 							 guint		 delay_secs);
-void		 fu_device_set_quirks			(FuDevice	*self,
-							 FuQuirks	*quirks);
-FuQuirks	*fu_device_get_quirks			(FuDevice	*self);
+void		 fu_device_set_context			(FuDevice	*self,
+							 FuContext	*ctx);
+FuContext	*fu_device_get_context			(FuDevice	*self);
 FwupdRelease	*fu_device_get_release_default		(FuDevice	*self);
 GType		 fu_device_get_specialized_gtype	(FuDevice	*self);
 void		 fu_device_add_internal_flag		(FuDevice	*self,
@@ -434,3 +463,5 @@ gboolean	 fu_device_unbind_driver		(FuDevice	*self,
 							 G_GNUC_WARN_UNUSED_RESULT;
 GHashTable	*fu_device_report_metadata_pre		(FuDevice	*self);
 GHashTable	*fu_device_report_metadata_post		(FuDevice	*self);
+void		 fu_device_add_security_attrs		(FuDevice	*self,
+							 FuSecurityAttrs *attrs);

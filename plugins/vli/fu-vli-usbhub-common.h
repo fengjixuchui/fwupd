@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "fu-plugin.h"
+#include <fwupdplugin.h>
 
 #include "fu-vli-common.h"
 
@@ -63,3 +63,5 @@ guint8		 fu_vli_usbhub_header_crc8		(FuVliUsbhubHeader	*hdr);
 void		 fu_vli_usbhub_header_to_string		(FuVliUsbhubHeader	*hdr,
 							 guint			 idt,
 							 GString		 *str);
+void		 fu_vli_usbhub_header_export		(FuVliUsbhubHeader	*hdr,
+							 XbBuilderNode		*bn);

@@ -35,6 +35,62 @@
     <binary>fwupdagent</binary>
   </provides>
   <releases>
+    <release version="1.6.0" date="2021-04-26">
+      <description>
+        <p>
+          This is the first release of the 1.6.x series, and since 1.5.x
+          some internal plugin API has been changed and removed.
+          Although we've tested this release on all the hardware we have
+          regression tests for, bugs may have crept in; please report failures
+          to the issue tracker as required.
+        </p>
+        <p>
+          There are several new plugins adding support for new hardware
+          and a lot of code has been migrated to the new plugin API.
+          The public libfwupd API also has some trivial additions, although no
+          action is required.
+        </p>
+        <p>
+          This release adds the following features:
+        </p>
+        <ul>
+          <li>Add a composite ID that is used to identify dock device components</li>
+          <li>Add an Intel Flash Descriptor parser</li>
+          <li>Add API to allow the device to report its own battery level</li>
+          <li>Add API to recount why the the device is non-updatable</li>
+          <li>Add lspcon-i2c-spi programmer support</li>
+          <li>Add more hardware support to the pixart-rf plugin</li>
+          <li>Add some more new category types for firmware to use</li>
+          <li>Add support for downloading the SPI image from the Intel eSPI device</li>
+          <li>Add support for some Analogix hardware</li>
+          <li>Add support for writing SREC firmware</li>
+          <li>Add the firmware-sign command to fwupdtool to allow resigning archives</li>
+          <li>Split UEFI EFI binary into a subproject</li>
+          <li>Use an OFD or Unix lock to prevent more than one fwupdtool process</li>
+        </ul>
+        <p>This release fixes the following bugs:</p>
+        <ul>
+          <li>Actually write the bcm57xx stage1 version into the file</li>
+          <li>Add option to disable the UEFI capsule splash screen generation</li>
+          <li>Avoid use-after-free when specifying the VID/PID in dfu-tool</li>
+          <li>Cancel the GDBusObjectManager operation to fix a potential crash</li>
+          <li>Check PixArt firmware compatibility with hardware before flashing</li>
+          <li>Do not check for native dependencies as target dependencies</li>
+          <li>Do not use help2man to build manual pages</li>
+          <li>Fix a crash when shutting down the daemon</li>
+          <li>Fix build on musl</li>
+          <li>Fix build when using BSD</li>
+          <li>Fix /etc/os-release ID_LIKE field parsing</li>
+          <li>Force the synaptics-rmi hardware into IEP mode as required</li>
+          <li>Never allow D-Bus replacement when a firmware update is in operation</li>
+          <li>Offer the user to refresh the remote after enabling</li>
+          <li>Remove unused, unsafe and deprecated functions from libfwupdplugin</li>
+          <li>Simplify asking the user about reviews</li>
+          <li>Write BMP data directly without using PIL</li>
+          <li>Write synaptics-rmi files with valid checksum data</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.5.7" date="2021-02-23">
       <description>
         <p>This release adds the following features:</p>
@@ -137,7 +193,7 @@
         <p>This release fixes the following bugs:</p>
         <ul>
           <li>Add a UEFI quirk for Star Labs Lite Mk III</li>
-          <li>Add the device firmare ID for serio class hardware</li>
+          <li>Add the device firmware ID for serio class hardware</li>
           <li>Allow the client to send legacy PKCS7 and GPG signatures</li>
           <li>Do not use accidentally depend on new meson versions</li>
           <li>Fix a possible critical warning due to missing retval</li>
@@ -632,7 +688,7 @@
         </ul>
         <p>This release fixes the following bugs:</p>
         <ul>
-          <li>Blacklist the synapticsmst plugin when using amdgpu</li>
+          <li>Blocklist the synapticsmst plugin when using amdgpu</li>
           <li>Correct ATA activation functionality to work for all vendors</li>
           <li>Implement QMI PDC active config selection for modems</li>
           <li>Make an error message clearer when there are no updates available</li>
@@ -1120,7 +1176,7 @@
           <li>Catch invalid Dell dock component requests</li>
           <li>Correctly output Intel HEX files with &gt; 16bit offset addresses</li>
           <li>Do not try to verify the element write if upload is unsupported</li>
-          <li>Fix a double-unref when updating any 8Bitdo device</li>
+          <li>Fix a double-unref when updating any 8BitDo device</li>
           <li>Fix crash when enumerating with Dell dock connected but with no UEFI</li>
           <li>Fix uploading large firmware files over DFU</li>
           <li>Format the BCD USB revision numbers correctly</li>
@@ -1133,7 +1189,7 @@
             fwupdmgr
           </li>
           <li>Use the correct wDetachTimeOut when writing DFU firmware</li>
-          <li>Verify devices with legacy VIDs are actually 8Bitdo controllers</li>
+          <li>Verify devices with legacy VIDs are actually 8BitDo controllers</li>
         </ul>
       </description>
     </release>
@@ -1149,7 +1205,7 @@
             device
           </li>
           <li>Add FuDeviceLocker to simplify device open/close lifecycles</li>
-          <li>Add functionality to blacklist Dell HW with problems</li>
+          <li>Add functionality to blocklist Dell HW with problems</li>
           <li>Add fu_plugin_check_supported()</li>
           <li>Add fwupd_remote_get_checksum() to use in client programs</li>
           <li>Add ModifyRemote as an easy way to enable and disable remotes</li>
@@ -1222,7 +1278,7 @@
         </ul>
         <p>This release fixes the following bugs:</p>
         <ul>
-          <li>Check all the device GUIDs against the blacklist when added</li>
+          <li>Check all the device GUIDs against the blocklist when added</li>
           <li>Correct a memory leak in Dell plugin</li>
           <li>Default to 'en' for UEFI capsule graphics</li>
           <li>Don't log a warning when an unknown unifying report is parsed</li>
@@ -1464,7 +1520,7 @@
         </ul>
         <p>This release fixes the following bugs:</p>
         <ul>
-          <li>Add XPS 9250 to Dell TPM modeswitch blacklist</li>
+          <li>Add XPS 9250 to Dell TPM modeswitch blocklist</li>
           <li>Allow blacklisting devices by their GUID</li>
           <li>Conditionally enable all providers based upon installed</li>
           <li>Display flashes left in results output when it gets low</li>

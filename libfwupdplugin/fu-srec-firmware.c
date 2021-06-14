@@ -15,20 +15,20 @@
 #include "fu-srec-firmware.h"
 
 /**
- * SECTION:fu-srec-firmware
- * @short_description: SREC firmware image
+ * FuSrecFirmware:
  *
- * An object that represents a SREC firmware image.
+ * A SREC firmware image.
  *
- * See also: #FuFirmware
+ * See also: [class@FuFirmware]
  */
 
-struct _FuSrecFirmware {
+typedef struct {
 	FuFirmware		 parent_instance;
 	GPtrArray		*records;
-};
+} FuSrecFirmwarePrivate;
 
-G_DEFINE_TYPE (FuSrecFirmware, fu_srec_firmware, FU_TYPE_FIRMWARE)
+G_DEFINE_TYPE_WITH_PRIVATE (FuSrecFirmware, fu_srec_firmware, FU_TYPE_FIRMWARE)
+#define GET_PRIVATE(o) (fu_srec_firmware_get_instance_private (o))
 
 /**
  * fu_srec_firmware_get_records:
@@ -46,8 +46,9 @@ G_DEFINE_TYPE (FuSrecFirmware, fu_srec_firmware, FU_TYPE_FIRMWARE)
 GPtrArray *
 fu_srec_firmware_get_records (FuSrecFirmware *self)
 {
+	FuSrecFirmwarePrivate *priv = GET_PRIVATE (self);
 	g_return_val_if_fail (FU_IS_SREC_FIRMWARE (self), NULL);
-	return self->records;
+	return priv->records;
 }
 
 static void
@@ -60,7 +61,7 @@ fu_srec_firmware_record_free (FuSrecFirmwareRecord *rcd)
 /**
  * fu_srec_firmware_record_new: (skip):
  * @ln: unsigned integer
- * @kind: #FuFirmwareSrecRecordKind
+ * @kind: a record kind, e.g. #FU_FIRMWARE_SREC_RECORD_KIND_S3_DATA_32
  * @addr: unsigned integer
  *
  * Returns a single firmware record
@@ -80,11 +81,43 @@ fu_srec_firmware_record_new (guint ln, FuFirmareSrecRecordKind kind, guint32 add
 	return rcd;
 }
 
+static FuSrecFirmwareRecord *
+fu_srec_firmware_record_dup (const FuSrecFirmwareRecord *rcd)
+{
+	FuSrecFirmwareRecord *dest;
+	g_return_val_if_fail (rcd != NULL, NULL);
+	dest = fu_srec_firmware_record_new (rcd->ln, rcd->kind, rcd->addr);
+	dest->buf = g_byte_array_ref (rcd->buf);
+	return dest;
+}
+
+/**
+ * fu_srec_firmware_record_get_type:
+ *
+ * Gets a specific type.
+ *
+ * Return value: a #GType
+ *
+ * Since: 1.6.1
+ **/
+GType
+fu_srec_firmware_record_get_type (void)
+{
+	static GType type_id = 0;
+	if (!type_id) {
+		type_id = g_boxed_type_register_static ("FuSrecFirmwareRecord",
+							(GBoxedCopyFunc) fu_srec_firmware_record_dup,
+							(GBoxedFreeFunc) fu_srec_firmware_record_free);
+	}
+	return type_id;
+}
+
 static gboolean
 fu_srec_firmware_tokenize (FuFirmware *firmware, GBytes *fw,
 			   FwupdInstallFlags flags, GError **error)
 {
 	FuSrecFirmware *self = FU_SREC_FIRMWARE (firmware);
+	FuSrecFirmwarePrivate *priv = GET_PRIVATE (self);
 	const gchar *data;
 	gboolean got_eof = FALSE;
 	gsize sz = 0;
@@ -253,7 +286,7 @@ fu_srec_firmware_tokenize (FuFirmware *firmware, GBytes *fw,
 				fu_byte_array_append_uint8 (rcd->buf, tmp);
 			}
 		}
-		g_ptr_array_add (self->records, rcd);
+		g_ptr_array_add (priv->records, rcd);
 	}
 
 	/* no EOF */
@@ -276,6 +309,7 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 			GError **error)
 {
 	FuSrecFirmware *self = FU_SREC_FIRMWARE (firmware);
+	FuSrecFirmwarePrivate *priv = GET_PRIVATE (self);
 	gboolean got_hdr = FALSE;
 	guint16 data_cnt = 0;
 	guint32 addr32_last = 0;
@@ -284,8 +318,8 @@ fu_srec_firmware_parse (FuFirmware *firmware,
 	g_autoptr(GByteArray) outbuf = g_byte_array_new ();
 
 	/* parse records */
-	for (guint j = 0; j < self->records->len; j++) {
-		FuSrecFirmwareRecord *rcd = g_ptr_array_index (self->records, j);
+	for (guint j = 0; j < priv->records->len; j++) {
+		FuSrecFirmwareRecord *rcd = g_ptr_array_index (priv->records, j);
 
 		/* header */
 		if (rcd->kind == FU_FIRMWARE_SREC_RECORD_KIND_S0_HEADER) {
@@ -500,14 +534,16 @@ static void
 fu_srec_firmware_finalize (GObject *object)
 {
 	FuSrecFirmware *self = FU_SREC_FIRMWARE (object);
-	g_ptr_array_unref (self->records);
+	FuSrecFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_ptr_array_unref (priv->records);
 	G_OBJECT_CLASS (fu_srec_firmware_parent_class)->finalize (object);
 }
 
 static void
 fu_srec_firmware_init (FuSrecFirmware *self)
 {
-	self->records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_srec_firmware_record_free);
+	FuSrecFirmwarePrivate *priv = GET_PRIVATE (self);
+	priv->records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_srec_firmware_record_free);
 	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_HAS_CHECKSUM);
 }
 
@@ -525,7 +561,7 @@ fu_srec_firmware_class_init (FuSrecFirmwareClass *klass)
 /**
  * fu_srec_firmware_new:
  *
- * Creates a new #FuFirmware of sub type Srec
+ * Creates a new #FuFirmware of type SREC
  *
  * Since: 1.3.2
  **/

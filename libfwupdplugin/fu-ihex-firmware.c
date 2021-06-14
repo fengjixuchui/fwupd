@@ -15,20 +15,21 @@
 #include "fu-ihex-firmware.h"
 
 /**
- * SECTION:fu-ihex-firmware
- * @short_description: Ihex firmware image
+ * FuIhexFirmware:
  *
- * An object that represents a Ihex firmware image.
+ * A Intel hex (ihex) firmware image.
  *
- * See also: #FuFirmware
+ * See also: [class@FuFirmware]
  */
 
-struct _FuIhexFirmware {
+typedef struct {
 	FuFirmware		 parent_instance;
 	GPtrArray		*records;
-};
+	guint8			 padding_value;
+} FuIhexFirmwarePrivate;
 
-G_DEFINE_TYPE (FuIhexFirmware, fu_ihex_firmware, FU_TYPE_FIRMWARE)
+G_DEFINE_TYPE_WITH_PRIVATE (FuIhexFirmware, fu_ihex_firmware, FU_TYPE_FIRMWARE)
+#define GET_PRIVATE(o) (fu_ihex_firmware_get_instance_private (o))
 
 /**
  * fu_ihex_firmware_get_records:
@@ -46,8 +47,29 @@ G_DEFINE_TYPE (FuIhexFirmware, fu_ihex_firmware, FU_TYPE_FIRMWARE)
 GPtrArray *
 fu_ihex_firmware_get_records (FuIhexFirmware *self)
 {
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
 	g_return_val_if_fail (FU_IS_IHEX_FIRMWARE (self), NULL);
-	return self->records;
+	return priv->records;
+}
+
+/**
+ * fu_ihex_firmware_set_padding_value:
+ * @self: A #FuIhexFirmware
+ * @padding_value: the byte used to pad the image
+ *
+ * Set the padding value to fill incomplete address ranges.
+ *
+ * The default value of zero can be changed to `0xff` if functions like
+ * fu_common_bytes_is_empty() are going to be used on subsections of the data.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_ihex_firmware_set_padding_value (FuIhexFirmware *self, guint8 padding_value)
+{
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_return_if_fail (FU_IS_IHEX_FIRMWARE (self));
+	priv->padding_value = padding_value;
 }
 
 static void
@@ -165,6 +187,7 @@ fu_ihex_firmware_tokenize (FuFirmware *firmware, GBytes *fw,
 			   FwupdInstallFlags flags, GError **error)
 {
 	FuIhexFirmware *self = FU_IHEX_FIRMWARE (firmware);
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
 	gsize sz = 0;
 	const gchar *data = g_bytes_get_data (fw, &sz);
 	g_auto(GStrv) lines = fu_common_strnsplit (data, sz, "\n", -1);
@@ -181,7 +204,7 @@ fu_ihex_firmware_tokenize (FuFirmware *firmware, GBytes *fw,
 			g_prefix_error (error, "invalid line %u: ", ln + 1);
 			return FALSE;
 		}
-		g_ptr_array_add (self->records, g_steal_pointer (&rcd));
+		g_ptr_array_add (priv->records, g_steal_pointer (&rcd));
 	}
 	return TRUE;
 }
@@ -195,6 +218,7 @@ fu_ihex_firmware_parse (FuFirmware *firmware,
 			GError **error)
 {
 	FuIhexFirmware *self = FU_IHEX_FIRMWARE (firmware);
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
 	gboolean got_eof = FALSE;
 	gboolean got_sig = FALSE;
 	guint32 abs_addr = 0x0;
@@ -205,8 +229,8 @@ fu_ihex_firmware_parse (FuFirmware *firmware,
 	g_autoptr(GByteArray) buf = g_byte_array_new ();
 
 	/* parse records */
-	for (guint k = 0; k < self->records->len; k++) {
-		FuIhexFirmwareRecord *rcd = g_ptr_array_index (self->records, k);
+	for (guint k = 0; k < priv->records->len; k++) {
+		FuIhexFirmwareRecord *rcd = g_ptr_array_index (priv->records, k);
 		guint16 addr16 = 0;
 		guint32 addr = rcd->addr + seg_addr + abs_addr;
 		guint32 len_hole;
@@ -228,6 +252,23 @@ fu_ihex_firmware_parse (FuFirmware *firmware,
 		/* process different record types */
 		switch (rcd->record_type) {
 		case FU_IHEX_FIRMWARE_RECORD_TYPE_DATA:
+
+			/* does not make sense */
+			if (got_eof) {
+				g_set_error_literal (error,
+						     FWUPD_ERROR,
+						     FWUPD_ERROR_INVALID_FILE,
+						     "cannot process data after EOF");
+				return FALSE;
+			}
+			if (rcd->data->len == 0) {
+				g_set_error_literal (error,
+						     FWUPD_ERROR,
+						     FWUPD_ERROR_INVALID_FILE,
+						     "cannot parse invalid data");
+				return FALSE;
+			}
+
 			/* base address for element */
 			if (img_addr == G_MAXUINT32)
 				img_addr = addr;
@@ -258,13 +299,18 @@ fu_ihex_firmware_parse (FuFirmware *firmware,
 			if (addr_last > 0x0 && len_hole > 1) {
 				g_debug ("filling address 0x%08x to 0x%08x on line %u",
 					 addr_last + 1, addr_last + len_hole - 1, rcd->ln);
-				for (guint j = 1; j < len_hole; j++) {
-					/* although 0xff might be clearer,
-					 * we can't write 0xffff to pic14 */
-					fu_byte_array_append_uint8 (buf, 0x00);
-				}
+				for (guint j = 1; j < len_hole; j++)
+					fu_byte_array_append_uint8 (buf, priv->padding_value);
 			}
 			addr_last = addr + rcd->data->len - 1;
+			if (addr_last < addr) {
+				g_set_error (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_INVALID_FILE,
+					     "overflow of address 0x%x on line %u",
+					     (guint) addr, rcd->ln);
+				return FALSE;
+			}
 
 			/* write into buf */
 			g_byte_array_append (buf, rcd->data->data, rcd->data->len);
@@ -448,14 +494,17 @@ static void
 fu_ihex_firmware_finalize (GObject *object)
 {
 	FuIhexFirmware *self = FU_IHEX_FIRMWARE (object);
-	g_ptr_array_unref (self->records);
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
+	g_ptr_array_unref (priv->records);
 	G_OBJECT_CLASS (fu_ihex_firmware_parent_class)->finalize (object);
 }
 
 static void
 fu_ihex_firmware_init (FuIhexFirmware *self)
 {
-	self->records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_ihex_firmware_record_free);
+	FuIhexFirmwarePrivate *priv = GET_PRIVATE (self);
+	priv->padding_value = 0x00;	/* chosen as we can't write 0xffff to PIC14 */
+	priv->records = g_ptr_array_new_with_free_func ((GFreeFunc) fu_ihex_firmware_record_free);
 	fu_firmware_add_flag (FU_FIRMWARE (self), FU_FIRMWARE_FLAG_HAS_CHECKSUM);
 }
 

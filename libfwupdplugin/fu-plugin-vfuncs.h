@@ -8,6 +8,8 @@
 
 #include "fu-plugin.h"
 #include "fu-device.h"
+#include "fu-hwids.h"
+#include "fu-quirks.h"
 #include "fu-security-attrs.h"
 
 /* for in-tree plugins only */
@@ -16,17 +18,6 @@
 /* only until HSI is declared stable */
 #include "fwupd-security-attr-private.h"
 #endif
-
-/**
- * SECTION:fu-plugin-vfuncs
- * @short_description: Virtual functions for plugins
- *
- * Optional functions that a plugin can implement.  If implemented they will
- * be automatically called by the daemon as part of the plugin lifecycle.
- *
- * See also: #FuPlugin
- */
-
 
 /**
  * fu_plugin_init:
@@ -42,7 +33,7 @@ void		 fu_plugin_init				(FuPlugin	*plugin);
 
 /**
  * fu_plugin_destroy:
- * @plugin: A #FuPlugin
+ * @plugin: a plugin
  *
  * Destroys the plugin.
  * Any allocated memory should be freed here.
@@ -53,8 +44,8 @@ void		 fu_plugin_destroy			(FuPlugin	*plugin);
 
 /**
  * fu_plugin_startup:
- * @plugin: A #FuPlugin
- * @error: A #GError
+ * @plugin: a plugin
+ * @error: (nullable): optional return location for an error
  *
  * Tries to start the plugin.
  * Returns: TRUE for success or FALSE for failure.
@@ -69,8 +60,8 @@ gboolean	 fu_plugin_startup			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_coldplug:
- * @plugin: A #FuPlugin
- * @error: A #GError
+ * @plugin: a plugin
+ * @error: (nullable): optional return location for an error
  *
  * Probes for devices.
  *
@@ -80,8 +71,8 @@ gboolean	 fu_plugin_coldplug			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_coldplug_prepare:
- * @plugin: A #FuPlugin
- * @error: A #GError
+ * @plugin: a plugin
+ * @error: (nullable): optional return location for an error
  *
  * Prepares to probe for devices.
  *
@@ -91,8 +82,8 @@ gboolean	 fu_plugin_coldplug_prepare		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_coldplug_cleanup:
- * @plugin: A #FuPlugin
- * @error: A #GError
+ * @plugin: a plugin
+ * @error: (nullable): optional return location for an error
  *
  * Cleans up from probe for devices.
  *
@@ -101,23 +92,12 @@ gboolean	 fu_plugin_coldplug_prepare		(FuPlugin	*plugin,
 gboolean	 fu_plugin_coldplug_cleanup		(FuPlugin	*plugin,
 							 GError		**error);
 /**
- * fu_plugin_recoldplug:
- * @plugin: A #FuPlugin
- * @error: A #GError or NULL
- *
- * Re-runs the coldplug routine for devices.
- *
- * Since: 1.0.4
- **/
-gboolean	 fu_plugin_recoldplug			(FuPlugin	*plugin,
-							 GError		**error);
-/**
  * fu_plugin_update:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @blob_fw: A #GBytes
- * @flags: A #FwupdInstallFlags
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @blob_fw: a data blob
+ * @flags: install flags
+ * @error: (nullable): optional return location for an error
  *
  * Updates the firmware on the device with blob_fw
  *
@@ -130,10 +110,10 @@ gboolean	 fu_plugin_update			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_verify:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @flags: A #FuPluginVerifyFlags
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @flags: verify flags
+ * @error: (nullable): optional return location for an error
  *
  * Verifies the firmware on the device matches the value stored in the database
  *
@@ -145,9 +125,9 @@ gboolean	 fu_plugin_verify			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_unlock:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Unlocks the device for writes.
  *
@@ -158,9 +138,9 @@ gboolean	 fu_plugin_unlock			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_activate:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Activates the new firmware on the device.
  *
@@ -174,9 +154,9 @@ gboolean	 fu_plugin_activate			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_clear_results:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Clears stored update results for the device.
  *
@@ -187,9 +167,9 @@ gboolean	 fu_plugin_clear_results		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_get_results:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Obtains historical update results for the device.
  *
@@ -200,9 +180,9 @@ gboolean	 fu_plugin_get_results			(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_update_attach:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Swaps the device from bootloader mode to runtime mode.
  *
@@ -213,9 +193,9 @@ gboolean	 fu_plugin_update_attach		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_update_detach:
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Swaps the device from runtime mode to bootloader mode.
  *
@@ -226,10 +206,10 @@ gboolean	 fu_plugin_update_detach		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_update_prepare:
- * @plugin: A #FuPlugin
- * @flags: A #FwupdInstallFlags
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @flags: install flags
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Prepares the device to receive an update.
  *
@@ -241,10 +221,10 @@ gboolean	 fu_plugin_update_prepare		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_update_cleanup
- * @plugin: A #FuPlugin
- * @flags: A #FwupdInstallFlags
- * @dev: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @flags: install flags
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Cleans up the device after receiving an update.
  *
@@ -256,9 +236,9 @@ gboolean	 fu_plugin_update_cleanup		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_composite_prepare
- * @plugin: A #FuPlugin
- * @devices: A #GPtrArray of #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @devices: (element-type FuDevice): array of devices
+ * @error: (nullable): optional return location for an error
  *
  * Function run before updating group of composite devices.
  *
@@ -269,9 +249,9 @@ gboolean	 fu_plugin_composite_prepare		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_composite_cleanup
- * @plugin: A #FuPlugin
- * @devices: A #GPtrArray of #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @devices: (element-type FuDevice): array of devices
+ * @error: (nullable): optional return location for an error
  *
  * Function run after updating group of composite devices.
  *
@@ -282,9 +262,9 @@ gboolean	 fu_plugin_composite_cleanup		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_backend_device_added
- * @plugin: A #FuPlugin
- * @device: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @device: a device
+ * @error: (nullable): optional return location for an error
  *
  * Function to run after a device is added by a backend, e.g. by USB or Udev.
  *
@@ -295,9 +275,9 @@ gboolean	 fu_plugin_backend_device_added		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_backend_device_changed
- * @plugin: A #FuPlugin
- * @device: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @device: a device
+ * @error: (nullable): optional return location for an error
  *
  * Function run when the device changed.
  *
@@ -308,9 +288,9 @@ gboolean	 fu_plugin_backend_device_changed	(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_backend_device_removed
- * @plugin: A #FuPlugin
- * @device: A #FuDevice
- * @error: A #GError or NULL
+ * @plugin: a plugin
+ * @device: a device
+ * @error: (nullable): optional return location for an error
  *
  * Function to run when device is physically removed.
  *
@@ -321,8 +301,8 @@ gboolean	 fu_plugin_backend_device_removed	(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_device_added
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
+ * @plugin: a plugin
+ * @dev: a device
  *
  * Function run when the subclassed device has been added.
  *
@@ -332,9 +312,9 @@ void		 fu_plugin_device_added			(FuPlugin	*plugin,
 							 FuDevice	*dev);
 /**
  * fu_plugin_device_created
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
- * @error: A #GError or %NULL
+ * @plugin: a plugin
+ * @dev: a device
+ * @error: (nullable): optional return location for an error
  *
  * Function run when the subclassed device has been created.
  *
@@ -345,8 +325,8 @@ gboolean	 fu_plugin_device_created		(FuPlugin	*plugin,
 							 GError		**error);
 /**
  * fu_plugin_device_registered
- * @plugin: A #FuPlugin
- * @dev: A #FuDevice
+ * @plugin: a plugin
+ * @dev: a device
  *
  * Function run when device registered from another plugin.
  *
@@ -356,8 +336,8 @@ void		 fu_plugin_device_registered		(FuPlugin	*plugin,
 							 FuDevice	*dev);
 /**
  * fu_plugin_add_security_attrs
- * @plugin: A #FuPlugin
- * @attrs: A #FuSecurityAttrs
+ * @plugin: a plugin
+ * @attrs: a security attribute
  *
  * Function that asks plugins to add Host Security Attributes.
  *

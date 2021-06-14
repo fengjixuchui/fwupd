@@ -16,6 +16,38 @@
 #define FU_TYPE_FIRMWARE (fu_firmware_get_type ())
 G_DECLARE_DERIVABLE_TYPE (FuFirmware, fu_firmware, FU, FIRMWARE, GObject)
 
+/**
+ * FU_FIRMWARE_EXPORT_FLAG_NONE:
+ *
+ * No flags set.
+ *
+ * Since: 1.6.0
+ **/
+#define FU_FIRMWARE_EXPORT_FLAG_NONE			(0u)
+/**
+ * FU_FIRMWARE_EXPORT_FLAG_INCLUDE_DEBUG:
+ *
+ * Include debug information when exporting.
+ *
+ * Since: 1.6.0
+ **/
+#define FU_FIRMWARE_EXPORT_FLAG_INCLUDE_DEBUG		(1u << 0)
+/**
+ * FU_FIRMWARE_EXPORT_FLAG_ASCII_DATA:
+ *
+ * Write the data as UTF-8 strings.
+ *
+ * Since: 1.6.0
+ **/
+#define FU_FIRMWARE_EXPORT_FLAG_ASCII_DATA		(1u << 1)
+
+/**
+ * FuFirmwareExportFlags:
+ *
+ * The firmware export flags.
+ **/
+typedef guint64 FuFirmwareExportFlags;
+
 struct _FuFirmwareClass
 {
 	GObjectClass		 parent_class;
@@ -29,9 +61,9 @@ struct _FuFirmwareClass
 	GBytes			*(*write)		(FuFirmware	*self,
 							 GError		**error)
 							 G_GNUC_WARN_UNUSED_RESULT;
-	void			 (*to_string)		(FuFirmware	*self,
-							 guint		 indent,
-							 GString	*str);
+	void			 (*export)		(FuFirmware	*self,
+							 FuFirmwareExportFlags flags,
+							 XbBuilderNode	*bn);
 	gboolean		 (*tokenize)		(FuFirmware	*self,
 							 GBytes		*fw,
 							 FwupdInstallFlags flags,
@@ -50,25 +82,111 @@ struct _FuFirmwareClass
 };
 
 /**
+ * FU_FIRMWARE_FLAG_NONE:
+ *
+ * No flags set.
+ *
+ * Since: 1.5.0
+ **/
+#define FU_FIRMWARE_FLAG_NONE			(0u)
+/**
+ * FU_FIRMWARE_FLAG_DEDUPE_ID:
+ *
+ * Dedupe imges by ID.
+ *
+ * Since: 1.5.0
+ **/
+#define FU_FIRMWARE_FLAG_DEDUPE_ID		(1u << 0)
+/**
+ * FU_FIRMWARE_FLAG_DEDUPE_IDX:
+ *
+ * Dedupe imges by IDX.
+ *
+ * Since: 1.5.0
+ **/
+#define FU_FIRMWARE_FLAG_DEDUPE_IDX		(1u << 1)
+/**
+ * FU_FIRMWARE_FLAG_HAS_CHECKSUM:
+ *
+ * Has a CRC or checksum to test internal consistency.
+ *
+ * Since: 1.5.6
+ **/
+#define FU_FIRMWARE_FLAG_HAS_CHECKSUM		(1u << 2)
+/**
+ * FU_FIRMWARE_FLAG_HAS_VID_PID:
+ *
+ * Has a vendor or product ID in the firmware.
+ *
+ * Since: 1.5.6
+ **/
+#define FU_FIRMWARE_FLAG_HAS_VID_PID		(1u << 3)
+
+/**
  * FuFirmwareFlags:
- * @FU_FIRMWARE_FLAG_NONE:			No flags set
- * @FU_FIRMWARE_FLAG_DEDUPE_ID:			Dedupe imges by ID
- * @FU_FIRMWARE_FLAG_DEDUPE_IDX:		Dedupe imges by IDX
- * @FU_FIRMWARE_FLAG_HAS_CHECKSUM:		Has a CRC or checksum to test internal consistency
- * @FU_FIRMWARE_FLAG_HAS_VID_PID:		Has a vendor or product ID in the firmware
  *
  * The firmware flags.
  **/
-#define FU_FIRMWARE_FLAG_NONE			(0u)		/* Since: 1.5.0 */
-#define FU_FIRMWARE_FLAG_DEDUPE_ID		(1u << 0)	/* Since: 1.5.0 */
-#define FU_FIRMWARE_FLAG_DEDUPE_IDX		(1u << 1)	/* Since: 1.5.0 */
-#define FU_FIRMWARE_FLAG_HAS_CHECKSUM		(1u << 2)	/* Since: 1.5.6 */
-#define FU_FIRMWARE_FLAG_HAS_VID_PID		(1u << 3)	/* Since: 1.5.6 */
 typedef guint64 FuFirmwareFlags;
 
-#define FU_FIRMWARE_ID_PAYLOAD		"payload"
+/**
+ * FU_FIRMWARE_ID_PAYLOAD:
+ *
+ * The usual firmware ID string for the payload.
+ *
+ * Since: 1.6.0
+ **/
+#define FU_FIRMWARE_ID_PAYLOAD			"payload"
+/**
+ * FU_FIRMWARE_ID_SIGNATURE:
+ *
+ * The usual firmware ID string for the signature.
+ *
+ * Since: 1.6.0
+ **/
 #define FU_FIRMWARE_ID_SIGNATURE		"signature"
-#define FU_FIRMWARE_ID_HEADER		"header"
+/**
+ * FU_FIRMWARE_ID_HEADER:
+ *
+ * The usual firmware ID string for the header.
+ *
+ * Since: 1.6.0
+ **/
+#define FU_FIRMWARE_ID_HEADER			"header"
+
+#define FU_FIRMWARE_ALIGNMENT_1			0x00
+#define FU_FIRMWARE_ALIGNMENT_2			0x01
+#define FU_FIRMWARE_ALIGNMENT_4			0x02
+#define FU_FIRMWARE_ALIGNMENT_8			0x03
+#define FU_FIRMWARE_ALIGNMENT_16		0x04
+#define FU_FIRMWARE_ALIGNMENT_32		0x05
+#define FU_FIRMWARE_ALIGNMENT_64		0x06
+#define FU_FIRMWARE_ALIGNMENT_128		0x07
+#define FU_FIRMWARE_ALIGNMENT_256		0x08
+#define FU_FIRMWARE_ALIGNMENT_512		0x09
+#define FU_FIRMWARE_ALIGNMENT_1K		0x0A
+#define FU_FIRMWARE_ALIGNMENT_2K		0x0B
+#define FU_FIRMWARE_ALIGNMENT_4K		0x0C
+#define FU_FIRMWARE_ALIGNMENT_8K		0x0D
+#define FU_FIRMWARE_ALIGNMENT_16K		0x0E
+#define FU_FIRMWARE_ALIGNMENT_32K		0x0F
+#define FU_FIRMWARE_ALIGNMENT_64K		0x10
+#define FU_FIRMWARE_ALIGNMENT_128K		0x11
+#define FU_FIRMWARE_ALIGNMENT_256K		0x12
+#define FU_FIRMWARE_ALIGNMENT_512K		0x13
+#define FU_FIRMWARE_ALIGNMENT_1M		0x14
+#define FU_FIRMWARE_ALIGNMENT_2M		0x15
+#define FU_FIRMWARE_ALIGNMENT_4M		0x16
+#define FU_FIRMWARE_ALIGNMENT_8M		0x17
+#define FU_FIRMWARE_ALIGNMENT_16M		0x18
+#define FU_FIRMWARE_ALIGNMENT_32M		0x19
+#define FU_FIRMWARE_ALIGNMENT_64M		0x1A
+#define FU_FIRMWARE_ALIGNMENT_128M		0x1B
+#define FU_FIRMWARE_ALIGNMENT_256M		0x1C
+#define FU_FIRMWARE_ALIGNMENT_512M		0x1D
+#define FU_FIRMWARE_ALIGNMENT_1G		0x1E
+#define FU_FIRMWARE_ALIGNMENT_2G		0x1F
+#define FU_FIRMWARE_ALIGNMENT_4G		0x20
 
 const gchar	*fu_firmware_flag_to_string		(FuFirmwareFlags flag);
 FuFirmwareFlags	 fu_firmware_flag_from_string		(const gchar	*flag);
@@ -80,6 +198,12 @@ FuFirmware	*fu_firmware_new_from_gtypes		(GBytes		*fw,
 							 GError		**error,
 							 ...);
 gchar		*fu_firmware_to_string			(FuFirmware	*self);
+void		 fu_firmware_export			(FuFirmware	*self,
+							 FuFirmwareExportFlags flags,
+							 XbBuilderNode	*bn);
+gchar		*fu_firmware_export_to_xml		(FuFirmware	*self,
+							 FuFirmwareExportFlags flags,
+							 GError		**error);
 const gchar	*fu_firmware_get_version		(FuFirmware	*self);
 void		 fu_firmware_set_version		(FuFirmware	*self,
 							 const gchar	*version);
@@ -127,6 +251,10 @@ gboolean	 fu_firmware_tokenize			(FuFirmware	*self,
 							 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_firmware_build			(FuFirmware	*self,
 							 XbNode		*n,
+							 GError		**error)
+							 G_GNUC_WARN_UNUSED_RESULT;
+gboolean	 fu_firmware_build_from_xml		(FuFirmware	*self,
+							 const gchar	*xml,
 							 GError		**error)
 							 G_GNUC_WARN_UNUSED_RESULT;
 gboolean	 fu_firmware_parse			(FuFirmware	*self,

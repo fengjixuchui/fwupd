@@ -9,8 +9,18 @@
 #include "fu-firmware.h"
 
 #define FU_TYPE_IHEX_FIRMWARE (fu_ihex_firmware_get_type ())
-G_DECLARE_FINAL_TYPE (FuIhexFirmware, fu_ihex_firmware, FU, IHEX_FIRMWARE, FuFirmware)
+G_DECLARE_DERIVABLE_TYPE (FuIhexFirmware, fu_ihex_firmware, FU, IHEX_FIRMWARE, FuFirmware)
 
+struct _FuIhexFirmwareClass
+{
+	FuFirmwareClass		 parent_class;
+};
+
+/**
+ * FuIhexFirmwareRecord:
+ *
+ * A single Intel HEX record.
+ **/
 typedef struct {
 	guint		 ln;
 	GString		*buf;
@@ -28,5 +38,7 @@ typedef struct {
 #define FU_IHEX_FIRMWARE_RECORD_TYPE_START_LINEAR	0x05
 #define FU_IHEX_FIRMWARE_RECORD_TYPE_SIGNATURE		0xfd
 
-FuFirmware	*fu_ihex_firmware_new		(void);
-GPtrArray	*fu_ihex_firmware_get_records	(FuIhexFirmware	*self);
+FuFirmware	*fu_ihex_firmware_new			(void);
+GPtrArray	*fu_ihex_firmware_get_records		(FuIhexFirmware	*self);
+void		 fu_ihex_firmware_set_padding_value	(FuIhexFirmware	*self,
+							 guint8		 padding_value);

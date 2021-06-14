@@ -163,7 +163,6 @@ parts:
     stage-packages:
       - python3-gi
       - python3-gi-cairo
-      - python3-pil
     prime:
       - -etc
       - -usr
@@ -174,7 +173,7 @@ parts:
     meson-parameters: [--prefix=/,
                        -Dtests=false,
                        -Dbuild=all,
-                       -Dgtkdoc=false,
+                       -Ddocs=none,
                        -Dintrospection=false,
                        -Dman=false,
                        -Dplugin_modem_manager=true,

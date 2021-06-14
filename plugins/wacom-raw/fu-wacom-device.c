@@ -6,11 +6,10 @@
 
 #include "config.h"
 
+#include <fwupdplugin.h>
 #include <linux/hidraw.h>
 #include <sys/ioctl.h>
 
-#include "fu-chunk.h"
-#include "fu-ihex-firmware.h"
 #include "fu-wacom-common.h"
 #include "fu-wacom-device.h"
 
@@ -39,7 +38,7 @@ fu_wacom_device_to_string (FuDevice *device, guint idt, GString *str)
 	fu_common_string_append_kx (str, idt, "FlashSize", priv->flash_size);
 }
 
-guint
+gsize
 fu_wacom_device_get_block_sz (FuWacomDevice *self)
 {
 	FuWacomDevicePrivate *priv = GET_PRIVATE (self);

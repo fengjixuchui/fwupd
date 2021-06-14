@@ -6,10 +6,10 @@
 
 #include "config.h"
 
+#include <fwupdplugin.h>
 #include <scsi/sg.h>
 
 #include "fu-ata-device.h"
-#include "fu-chunk.h"
 
 #define FU_ATA_IDENTIFY_SIZE	512	/* bytes */
 #define FU_ATA_BLOCK_SIZE	512	/* bytes */
@@ -824,6 +824,7 @@ fu_ata_device_init (FuAtaDevice *self)
 	self->transfer_mode = ATA_SUBCMD_MICROCODE_DOWNLOAD_CHUNKS;
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_REQUIRE_AC);
 	fu_device_add_flag (FU_DEVICE (self), FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_internal_flag (FU_DEVICE (self), FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION);
 	fu_device_set_summary (FU_DEVICE (self), "ATA Drive");
 	fu_device_add_icon (FU_DEVICE (self), "drive-harddisk");
 	fu_device_add_protocol (FU_DEVICE (self), "org.t13.ata");

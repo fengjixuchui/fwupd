@@ -6,10 +6,9 @@
 
 #include "config.h"
 
-#include <string.h>
+#include <fwupdplugin.h>
 #include <gio/gio.h>
 
-#include "fu-chunk.h"
 #include "fu-wacom-common.h"
 #include "fu-wacom-aes-device.h"
 
@@ -175,10 +174,10 @@ fu_wacom_aes_device_write_block (FuWacomAesDevice *self,
 				 guint32 idx,
 				 guint32 address,
 				 const guint8 *data,
-				 guint16 datasz,
+				 gsize datasz,
 				 GError **error)
 {
-	guint blocksz = fu_wacom_device_get_block_sz (FU_WACOM_DEVICE (self));
+	gsize blocksz = fu_wacom_device_get_block_sz (FU_WACOM_DEVICE (self));
 	FuWacomRawRequest req = {
 		.cmd = FU_WACOM_RAW_BL_CMD_WRITE_FLASH,
 		.echo = (guint8) idx + 1,
@@ -194,10 +193,13 @@ fu_wacom_aes_device_write_block (FuWacomAesDevice *self,
 			     G_IO_ERROR,
 			     G_IO_ERROR_FAILED,
 			     "block size 0x%x != 0x%x untested",
-			     datasz, (guint) blocksz);
+			     (guint) datasz, (guint) blocksz);
 		return FALSE;
 	}
-	memcpy (&req.data, data, datasz);
+	if (!fu_memcpy_safe ((guint8 *) &req.data, sizeof(req.data), 0x0,	/* dst */
+			     data, datasz, 0x0,					/* src */
+			     datasz, error))
+		return FALSE;
 
 	/* write */
 	if (!fu_wacom_device_cmd (FU_WACOM_DEVICE (self), &req, &rsp, 1000,

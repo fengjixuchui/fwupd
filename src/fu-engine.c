@@ -32,14 +32,15 @@
 #include "fu-common-cab.h"
 #include "fu-common.h"
 #include "fu-config.h"
+#include "fu-context-private.h"
 #include "fu-debug.h"
 #include "fu-device-list.h"
 #include "fu-device-private.h"
 #include "fu-engine.h"
 #include "fu-engine-helper.h"
 #include "fu-engine-request.h"
-#include "fu-hwids.h"
 #include "fu-idle.h"
+#include "fu-kenv.h"
 #include "fu-keyring-utils.h"
 #include "fu-hash.h"
 #include "fu-history.h"
@@ -51,8 +52,8 @@
 #include "fu-remote-list.h"
 #include "fu-security-attr.h"
 #include "fu-security-attrs-private.h"
-#include "fu-smbios-private.h"
 #include "fu-udev-device-private.h"
+#include "fu-version.h"
 
 #ifdef HAVE_GUDEV
 #include "fu-udev-backend.h"
@@ -67,7 +68,6 @@
 #include "fu-dfu-firmware.h"
 #include "fu-dfuse-firmware.h"
 #include "fu-fmap-firmware.h"
-#include "fu-ifd-firmware.h"
 #include "fu-ihex-firmware.h"
 #include "fu-srec-firmware.h"
 
@@ -95,20 +95,14 @@ struct _FuEngine
 	FuHistory		*history;
 	FuIdle			*idle;
 	XbSilo			*silo;
-	gboolean		 coldplug_running;
 	guint			 coldplug_id;
-	guint			 coldplug_delay;
 	FuPluginList		*plugin_list;
 	GPtrArray		*plugin_filter;
-	GPtrArray		*udev_subsystems;
-	FuSmbios		*smbios;
-	FuHwids			*hwids;
-	FuQuirks		*quirks;
+	FuContext		*ctx;
 	GHashTable		*runtime_versions;
 	GHashTable		*compile_versions;
 	GHashTable		*approved_firmware;	/* (nullable) */
 	GHashTable		*blocked_firmware;	/* (nullable) */
-	GHashTable		*firmware_gtypes;
 	gchar			*host_machine_id;
 	JcatContext		*jcat_context;
 	gboolean		 loaded;
@@ -129,8 +123,6 @@ enum {
 static guint signals[SIGNAL_LAST] = { 0 };
 
 G_DEFINE_TYPE (FuEngine, fu_engine, G_TYPE_OBJECT)
-
-#define FU_ENGINE_BATTERY_LEVEL_THRESHOLD	10 /* % */
 
 static void
 fu_engine_emit_changed (FuEngine *self)
@@ -156,42 +148,15 @@ fu_engine_emit_device_changed (FuEngine *self, FuDevice *device)
 	g_signal_emit (self, signals[SIGNAL_DEVICE_CHANGED], 0, device);
 }
 
-static gint
-fu_engine_gtypes_sort_cb (gconstpointer a, gconstpointer b)
+FuContext *
+fu_engine_get_context (FuEngine *self)
 {
-	const gchar *stra = *((const gchar **) a);
-	const gchar *strb = *((const gchar **) b);
-	return g_strcmp0 (stra, strb);
-}
-
-GPtrArray *
-fu_engine_get_firmware_gtype_ids (FuEngine *self)
-{
-	GPtrArray *firmware_gtypes = g_ptr_array_new_with_free_func (g_free);
-	g_autoptr(GList) keys = g_hash_table_get_keys (self->firmware_gtypes);
-	for (GList *l = keys; l != NULL; l = l->next) {
-		const gchar *id = l->data;
-		g_ptr_array_add (firmware_gtypes, g_strdup (id));
-	}
-	g_ptr_array_sort (firmware_gtypes, fu_engine_gtypes_sort_cb);
-	return firmware_gtypes;
-}
-
-GType
-fu_engine_get_firmware_gtype_by_id (FuEngine *self, const gchar *id)
-{
-	return GPOINTER_TO_SIZE (g_hash_table_lookup (self->firmware_gtypes, id));
-}
-
-static void
-fu_engine_add_firmware_gtype (FuEngine *self, const gchar *id, GType gtype)
-{
-	g_hash_table_insert (self->firmware_gtypes, g_strdup (id), GSIZE_TO_POINTER (gtype));
+	return self->ctx;
 }
 
 /**
  * fu_engine_get_status:
- * @self: A #FuEngine
+ * @self: a #FuEngine
  *
  * Gets the current engine status.
  *
@@ -263,9 +228,33 @@ fu_engine_watch_device (FuEngine *self, FuDevice *device)
 }
 
 static void
+fu_engine_ensure_device_battery_inhibit (FuEngine *self, FuDevice *device)
+{
+	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_REQUIRE_AC) &&
+	    (fu_context_get_battery_state (self->ctx) == FU_BATTERY_STATE_DISCHARGING ||
+	     fu_context_get_battery_state (self->ctx) == FU_BATTERY_STATE_EMPTY)) {
+		fu_device_inhibit (device, "battery-system",
+				   "Cannot install update when not on AC power");
+		return;
+	}
+	if (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_REQUIRE_AC) &&
+	    fu_context_get_battery_level (self->ctx) != FU_BATTERY_VALUE_INVALID &&
+	    fu_context_get_battery_threshold (self->ctx) != FU_BATTERY_VALUE_INVALID &&
+	    fu_context_get_battery_level (self->ctx) < fu_context_get_battery_threshold (self->ctx)) {
+		g_autofree gchar *reason = NULL;
+		reason = g_strdup_printf ("Cannot install update when system battery is not at least %u%%",
+					  fu_context_get_battery_threshold (self->ctx));
+		fu_device_inhibit (device, "battery-system", reason);
+		return;
+	}
+	fu_device_uninhibit (device, "battery-system");
+}
+
+static void
 fu_engine_device_added_cb (FuDeviceList *device_list, FuDevice *device, FuEngine *self)
 {
 	fu_engine_watch_device (self, device);
+	fu_engine_ensure_device_battery_inhibit (self, device);
 	g_signal_emit (self, signals[SIGNAL_DEVICE_ADDED], 0, device);
 }
 
@@ -495,14 +484,14 @@ fu_engine_set_release_from_appstream (FuEngine *self,
 			if (uri == NULL)
 				uri = g_strdup (tmp);
 			fwupd_release_add_location (rel, uri);
-		} else if (remote != NULL &&
-			   fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_DIRECTORY) {
-			g_autofree gchar *uri = NULL;
-			tmp = xb_node_query_text (component, "../custom/value[@key='fwupd::FilenameCache']", NULL);
-			if (tmp != NULL)  {
-				uri = g_strdup_printf ("file://%s", tmp);
-				fwupd_release_add_location (rel, uri);
-			}
+		}
+	}
+	if (fwupd_release_get_locations(rel)->len == 0 && remote != NULL &&
+	    fwupd_remote_get_kind (remote) == FWUPD_REMOTE_KIND_DIRECTORY) {
+		tmp = xb_node_query_text (component, "../custom/value[@key='fwupd::FilenameCache']", NULL);
+		if (tmp != NULL)  {
+			g_autofree gchar *uri = g_strdup_printf ("file://%s", tmp);
+			fwupd_release_add_location (rel, uri);
 		}
 	}
 	if (artifact == NULL) {
@@ -560,8 +549,17 @@ fu_engine_set_release_from_appstream (FuEngine *self,
 	if (tmp != NULL)
 		fwupd_release_set_detach_caption (rel, tmp);
 	tmp = xb_node_query_text (component, "screenshots/screenshot/image", NULL);
-	if (tmp != NULL)
-		fwupd_release_set_detach_image (rel, tmp);
+	if (tmp != NULL) {
+		if (remote != NULL) {
+			g_autofree gchar *img = NULL;
+			img = fwupd_remote_build_firmware_uri (remote, tmp, error);
+			if (img == NULL)
+				return FALSE;
+			fwupd_release_set_detach_image (rel, img);
+		} else {
+			fwupd_release_set_detach_image (rel, tmp);
+		}
+	}
 	tmp = xb_node_query_text (component, "custom/value[@key='LVFS::UpdateProtocol']", NULL);
 	if (tmp != NULL)
 		fwupd_release_set_protocol (rel, tmp);
@@ -569,8 +567,17 @@ fu_engine_set_release_from_appstream (FuEngine *self,
 	if (tmp != NULL)
 		fwupd_release_set_update_message (rel, tmp);
 	tmp = xb_node_query_text (component, "custom/value[@key='LVFS::UpdateImage']", NULL);
-	if (tmp != NULL)
-		fwupd_release_set_update_image (rel, tmp);
+	if (tmp != NULL) {
+		if (remote != NULL) {
+			g_autofree gchar *img = NULL;
+			img = fwupd_remote_build_firmware_uri (remote, tmp, error);
+			if (img == NULL)
+				return FALSE;
+			fwupd_release_set_update_image (rel, img);
+		} else {
+			fwupd_release_set_update_image (rel, tmp);
+		}
+	}
 
 	/* sort the locations by scheme */
 	g_ptr_array_sort_with_data (fwupd_release_get_locations (rel),
@@ -596,9 +603,9 @@ fu_engine_get_remote_id_for_checksum (FuEngine *self, const gchar *csum)
 
 /**
  * fu_engine_unlock:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Unlocks a device.
  *
@@ -670,11 +677,11 @@ fu_engine_modify_config (FuEngine *self, const gchar *key, const gchar *value, G
 
 /**
  * fu_engine_modify_remote:
- * @self: A #FuEngine
- * @remote_id: A remote ID
+ * @self: a #FuEngine
+ * @remote_id: a remote ID
  * @key: the key, e.g. `Enabled`
  * @value: the key, e.g. `true`
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Updates the verification silo entry for a specific device.
  *
@@ -712,11 +719,11 @@ fu_engine_modify_remote (FuEngine *self,
 
 /**
  * fu_engine_modify_device:
- * @self: A #FuEngine
- * @device_id: A device ID
+ * @self: a #FuEngine
+ * @device_id: a device ID
  * @key: the key, e.g. `Flags`
  * @value: the key, e.g. `reported`
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Sets the reported flag for a specific device. This ensures that other
  * front-end clients for fwupd do not report the same event.
@@ -737,7 +744,7 @@ fu_engine_modify_device (FuEngine *self,
 	if (device == NULL)
 		return FALSE;
 
-	/* support adding a subset of the device flags */
+	/* support adding a subset of device flags */
 	if (g_strcmp0 (key, "Flags") == 0) {
 		FwupdDeviceFlags flag = fwupd_device_flag_from_string (value);
 		if (flag == FWUPD_DEVICE_FLAG_UNKNOWN) {
@@ -781,9 +788,9 @@ fu_engine_checksum_type_to_string (GChecksumType checksum_type)
 
 /**
  * fu_engine_verify_update:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Updates the verification silo entry for a specific device.
  *
@@ -1027,9 +1034,9 @@ fu_engine_verify_from_system_metadata (FuEngine *self,
 
 /**
  * fu_engine_verify:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Verifies a device firmware checksum using the verification silo entry.
  *
@@ -1405,7 +1412,35 @@ fu_engine_check_requirement_firmware (FuEngine *self, XbNode *req, FuDevice *dev
 			if (device_tmp == NULL)
 				return FALSE;
 			g_set_object (&device_actual, device_tmp);
-
+		/* look for a sibling */
+		} else if (depth == 0) {
+			FuDevice *child = NULL;
+			FuDevice *parent = fu_device_get_parent (device_actual);
+			GPtrArray *children;
+			if (parent == NULL) {
+				g_set_error (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_NOT_SUPPORTED,
+					     "No parent specified for device %s",
+					     fu_device_get_name (device_actual));
+				return FALSE;
+			}
+			children = fu_device_get_children (parent);
+			for (guint i = 0 ; i < children->len; i++) {
+				child = g_ptr_array_index (children, i);
+				if (fu_device_has_guid (child, guid))
+					break;
+				child = NULL;
+			}
+			if (child == NULL) {
+				g_set_error (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_NOT_SUPPORTED,
+					     "No sibling found with GUID of %s",
+					     guid);
+				return FALSE;
+			}
+			g_set_object (&device_actual, child);
 		/* verify the parent device has the GUID */
 		} else {
 			if (!fu_device_has_guid (device_actual, guid)) {
@@ -1503,7 +1538,7 @@ fu_engine_check_requirement_hardware (FuEngine *self, XbNode *req, GError **erro
 	/* split and treat as OR */
 	hwid_split = g_strsplit (xb_node_get_text (req), "|", -1);
 	for (guint i = 0; hwid_split[i] != NULL; i++) {
-		if (fu_hwids_has_guid (self->hwids, hwid_split[i])) {
+		if (fu_context_has_hwid_guid (self->ctx, hwid_split[i])) {
 			g_debug ("HWID provided %s", hwid_split[i]);
 			return TRUE;
 		}
@@ -1697,11 +1732,12 @@ fu_engine_get_report_metadata_os_release (GHashTable *hash, GError **error)
 	return TRUE;
 }
 
-static gboolean
-fu_engine_get_report_metadata_kernel_cmdline (GHashTable *hash, GError **error)
+static gchar *
+fu_engine_get_proc_cmdline (GError **error)
 {
 	gsize bufsz = 0;
 	g_autofree gchar *buf = NULL;
+	g_autoptr(GString) cmdline_safe = g_string_new (NULL);
 	const gchar *ignore[] = {
 		"",
 		"auto",
@@ -1767,10 +1803,9 @@ fu_engine_get_report_metadata_kernel_cmdline (GHashTable *hash, GError **error)
 
 	/* get a PII-safe kernel command line */
 	if (!g_file_get_contents ("/proc/cmdline", &buf, &bufsz, error))
-		return FALSE;
+		return NULL;
 	if (bufsz > 0) {
 		g_auto(GStrv) tokens = fu_common_strnsplit (buf, bufsz - 1, " ", -1);
-		g_autoptr(GString) cmdline_safe = g_string_new (NULL);
 		for (guint i = 0; tokens[i] != NULL; i++) {
 			g_auto(GStrv) kv = NULL;
 			if (strlen (tokens[i]) == 0)
@@ -1782,11 +1817,31 @@ fu_engine_get_report_metadata_kernel_cmdline (GHashTable *hash, GError **error)
 				g_string_append (cmdline_safe, " ");
 			g_string_append (cmdline_safe, tokens[i]);
 		}
-		if (cmdline_safe->len > 0) {
-			g_hash_table_insert (hash,
-					     g_strdup ("KernelCmdline"),
-					     g_strdup (cmdline_safe->str));
-		}
+	}
+	return g_string_free (g_steal_pointer (&cmdline_safe), FALSE);
+}
+
+static gchar *
+fu_engine_get_kernel_cmdline (GError **error)
+{
+	/* Linuxish */
+	if (g_file_test ("/proc/cmdline", G_FILE_TEST_EXISTS))
+		return fu_engine_get_proc_cmdline (error);
+
+	/* BSDish */
+	return fu_kenv_get_string ("kernel_options", error);
+}
+
+static gboolean
+fu_engine_get_report_metadata_kernel_cmdline (GHashTable *hash, GError **error)
+{
+	g_autofree gchar *cmdline = fu_engine_get_kernel_cmdline (error);
+	if (cmdline == NULL)
+		return FALSE;
+	if (cmdline[0] != '\0') {
+		g_hash_table_insert (hash,
+				     g_strdup ("KernelCmdline"),
+				     g_steal_pointer (&cmdline));
 	}
 	return TRUE;
 }
@@ -1825,16 +1880,16 @@ fu_engine_get_report_metadata (FuEngine *self, GError **error)
 		return NULL;
 
 	/* DMI data */
-	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_NAME);
+	tmp = fu_context_get_hwid_value (self->ctx, FU_HWIDS_KEY_PRODUCT_NAME);
 	if (tmp != NULL)
 		g_hash_table_insert (hash, g_strdup ("HostProduct"), g_strdup (tmp));
-	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_FAMILY);
+	tmp = fu_context_get_hwid_value (self->ctx, FU_HWIDS_KEY_FAMILY);
 	if (tmp != NULL)
 		g_hash_table_insert (hash, g_strdup ("HostFamily"), g_strdup (tmp));
-	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_SKU);
+	tmp = fu_context_get_hwid_value (self->ctx, FU_HWIDS_KEY_PRODUCT_SKU);
 	if (tmp != NULL)
 		g_hash_table_insert (hash, g_strdup ("HostSku"), g_strdup (tmp));
-	tmp = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_MANUFACTURER);
+	tmp = fu_context_get_hwid_value (self->ctx, FU_HWIDS_KEY_MANUFACTURER);
 	if (tmp != NULL)
 		g_hash_table_insert (hash, g_strdup ("HostVendor"), g_strdup (tmp));
 
@@ -1845,6 +1900,9 @@ fu_engine_get_report_metadata (FuEngine *self, GError **error)
 		g_hash_table_insert (hash,
 				     g_strdup ("CpuArchitecture"),
 				     g_strdup (name_tmp.machine));
+		g_hash_table_insert (hash,
+				     g_strdup ("KernelName"),
+				     g_strdup (name_tmp.sysname));
 		g_hash_table_insert (hash,
 				     g_strdup ("KernelVersion"),
 				     g_strdup (name_tmp.release));
@@ -1861,9 +1919,9 @@ fu_engine_get_report_metadata (FuEngine *self, GError **error)
 
 /**
  * fu_engine_composite_prepare:
- * @self: A #FuEngine
+ * @self: a #FuEngine
  * @devices: (element-type #FuDevice): devices that will be updated
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Calls into the plugin loader, informing each plugin of the pending upgrade(s).
  *
@@ -1885,9 +1943,9 @@ fu_engine_composite_prepare (FuEngine *self, GPtrArray *devices, GError **error)
 
 /**
  * fu_engine_composite_cleanup:
- * @self: A #FuEngine
+ * @self: a #FuEngine
  * @devices: (element-type #FuDevice): devices that will be updated
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Calls into the plugin loader, informing each plugin of the pending upgrade(s).
  *
@@ -1907,12 +1965,12 @@ fu_engine_composite_cleanup (FuEngine *self, GPtrArray *devices, GError **error)
 
 /**
  * fu_engine_install_tasks:
- * @self: A #FuEngine
- * @request: A #FuEngineRequest
- * @install_tasks: (element-type FuInstallTask): A #FuDevice
- * @blob_cab: The #GBytes of the .cab file
- * @flags: The #FwupdInstallFlags, e.g. %FWUPD_DEVICE_FLAG_UPDATABLE
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @request: a #FuEngineRequest
+ * @install_tasks: (element-type FuInstallTask): a device
+ * @blob_cab: the #GBytes of the .cab file
+ * @flags: install flags, e.g. %FWUPD_DEVICE_FLAG_UPDATABLE
+ * @error: (nullable): optional return location for an error
  *
  * Installs a specific firmware file on one or more install tasks.
  *
@@ -2131,11 +2189,11 @@ fu_engine_offline_invalidate (GError **error)
 /**
  * fu_engine_schedule_update:
  * @self: a #FuEngine
- * @device: a #FuDevice
- * @release: A #FwupdRelease
- * @blob_cab: A #GBytes
- * @flags: #FwupdInstallFlags
- * @error: A #GError or NULL
+ * @device: a device
+ * @release: a release
+ * @blob_cab: a data blob
+ * @flags: install flags
+ * @error: (nullable): optional return location for an error
  *
  * Schedule an offline update for the device
  *
@@ -2407,11 +2465,11 @@ fu_engine_sort_releases (FuEngine *self, FuDevice *device, GPtrArray *rels, GErr
 
 /**
  * fu_engine_install:
- * @self: A #FuEngine
- * @task: A #FuInstallTask
- * @blob_cab: The #GBytes of the .cab file
- * @flags: The #FwupdInstallFlags, e.g. %FWUPD_DEVICE_FLAG_UPDATABLE
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @task: a #FuInstallTask
+ * @blob_cab: the #GBytes of the .cab file
+ * @flags: install flags, e.g. %FWUPD_INSTALL_FLAG_ALLOW_OLDER
+ * @error: (nullable): optional return location for an error
  *
  * Installs a specific firmware file on a device.
  *
@@ -2548,7 +2606,7 @@ fu_engine_install (FuEngine *self,
 
 /**
  * fu_engine_get_plugins:
- * @self: A #FuPluginList
+ * @self: a #FuPluginList
  *
  * Gets all the plugins that have been added.
  *
@@ -2565,9 +2623,9 @@ fu_engine_get_plugins (FuEngine *self)
 
 /**
  * fu_engine_get_device:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Gets a specific device.
  *
@@ -2626,10 +2684,9 @@ fu_engine_device_prepare (FuEngine *self,
 		return FALSE;
 	}
 
-	/* check battery level is sane -- if the device needs a higher
-	 * threshold then it can be checked in FuDevice->prepare() */
+	/* check battery level is sane */
 	if (fu_device_get_battery_level (device) > 0 &&
-	    fu_device_get_battery_level (device) < FU_ENGINE_BATTERY_LEVEL_THRESHOLD) {
+	    fu_device_get_battery_level (device) < fu_device_get_battery_threshold (device)) {
 		g_set_error (error,
 			     FWUPD_ERROR,
 			     FWUPD_ERROR_BATTERY_LEVEL_TOO_LOW,
@@ -3277,6 +3334,18 @@ fu_common_device_category_to_name (const gchar *cat)
 		return "Platform Security Processor";
 	if (g_strcmp0 (cat, "X-CpuMicrocode") == 0)
 		return "CPU Microcode";
+	if (g_strcmp0 (cat, "X-Battery") == 0)
+		return "Battery";
+	if (g_strcmp0 (cat, "X-Camera") == 0)
+		return "Camera";
+	if (g_strcmp0 (cat, "X-TPM") == 0)
+		return "TPM";
+	if (g_strcmp0 (cat, "X-Touchpad") == 0)
+		return "Touchpad";
+	if (g_strcmp0 (cat, "X-Mouse") == 0)
+		return "Mouse";
+	if (g_strcmp0 (cat, "X-Keyboard") == 0)
+		return "Keyboard";
 	return NULL;
 }
 
@@ -3489,8 +3558,10 @@ fu_engine_load_metadata_store (FuEngine *self, FuEngineLoadFlags flags, GError *
 	xmlbfn = g_build_filename (cachedirpkg, "metadata.xmlb", NULL);
 	xmlb = g_file_new_for_path (xmlbfn);
 	self->silo = xb_builder_ensure (builder, xmlb, compile_flags, NULL, error);
-	if (self->silo == NULL)
+	if (self->silo == NULL) {
+		g_prefix_error (error, "cannot create file %s: ", xmlbfn);
 		return FALSE;
+	}
 
 	/* print what we've got */
 	components = xb_silo_query (self->silo,
@@ -3657,11 +3728,11 @@ fu_engine_validate_result_timestamp (JcatResult *jcat_result,
 
 /**
  * fu_engine_update_metadata_bytes:
- * @self: A #FuEngine
- * @remote_id: A remote ID, e.g. `lvfs`
+ * @self: a #FuEngine
+ * @remote_id: a remote ID, e.g. `lvfs`
  * @bytes_raw: Blob of metadata
  * @bytes_sig: Blob of metadata signature, typically Jcat binary format
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Updates the metadata for a specific remote.
  *
@@ -3792,11 +3863,11 @@ fu_engine_update_metadata_bytes (FuEngine *self, const gchar *remote_id,
 
 /**
  * fu_engine_update_metadata:
- * @self: A #FuEngine
- * @remote_id: A remote ID, e.g. `lvfs`
+ * @self: a #FuEngine
+ * @remote_id: a remote ID, e.g. `lvfs`
  * @fd: file descriptor of the metadata
  * @fd_sig: file descriptor of the metadata signature
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Updates the metadata for a specific remote.
  *
@@ -3849,9 +3920,9 @@ fu_engine_update_metadata (FuEngine *self, const gchar *remote_id,
 
 /**
  * fu_engine_get_silo_from_blob:
- * @self: A #FuEngine
- * @blob_cab: A #GBytes
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @blob_cab: a data blob
+ * @error: (nullable): optional return location for an error
  *
  * Creates a silo from a .cab file blob.
  *
@@ -4015,10 +4086,10 @@ fu_engine_get_details_sort_cb (gconstpointer a, gconstpointer b)
 
 /**
  * fu_engine_get_details:
- * @self: A #FuEngine
- * @request: A #FuEngineRequest
- * @fd: A file descriptor
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @request: a #FuEngineRequest
+ * @fd: a file descriptor
+ * @error: (nullable): optional return location for an error
  *
  * Gets the details about a local file.
  *
@@ -4145,8 +4216,8 @@ fu_engine_sort_devices_by_priority_name (gconstpointer a, gconstpointer b)
 
 /**
  * fu_engine_get_devices:
- * @self: A #FuEngine
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @error: (nullable): optional return location for an error
  *
  * Gets the list of devices.
  *
@@ -4174,9 +4245,9 @@ fu_engine_get_devices (FuEngine *self, GError **error)
 
 /**
  * fu_engine_get_devices_by_guid:
- * @self: A #FuEngine
- * @guid: A GUID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @guid: a GUID
+ * @error: (nullable): optional return location for an error
  *
  * Gets a specific device.
  *
@@ -4210,6 +4281,47 @@ fu_engine_get_devices_by_guid (FuEngine *self, const gchar *guid, GError **error
 	return g_steal_pointer (&devices);
 }
 
+/**
+ * fu_engine_get_devices_by_composite_id:
+ * @self: a #FuEngine
+ * @composite_id: a device ID
+ * @error: (nullable): optional return location for an error
+ *
+ * Gets all devices that match a specific composite ID.
+ *
+ * Returns: (transfer full) (element-type FuDevice): devices
+ **/
+GPtrArray *
+fu_engine_get_devices_by_composite_id (FuEngine *self,
+				       const gchar *composite_id,
+				       GError **error)
+{
+	g_autoptr(GPtrArray) devices = NULL;
+	g_autoptr(GPtrArray) devices_tmp = NULL;
+
+	/* find the devices by composite ID */
+	devices_tmp = fu_device_list_get_all (self->device_list);
+	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
+	for (guint i = 0; i < devices_tmp->len; i++) {
+		FuDevice *dev_tmp = g_ptr_array_index (devices_tmp, i);
+		if (g_strcmp0 (fu_device_get_composite_id (dev_tmp), composite_id) == 0)
+			g_ptr_array_add (devices, g_object_ref (dev_tmp));
+	}
+
+	/* nothing */
+	if (devices->len == 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_FOUND,
+			     "failed to find any device with composite ID %s",
+			     composite_id);
+		return NULL;
+	}
+
+	/* success */
+	return g_steal_pointer (&devices);
+}
+
 static void
 fu_engine_get_history_set_hsi_attrs (FuEngine *self, FuDevice *device)
 {
@@ -4233,8 +4345,8 @@ fu_engine_get_history_set_hsi_attrs (FuEngine *self, FuDevice *device)
 
 /**
  * fu_engine_get_history:
- * @self: A #FuEngine
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @error: (nullable): optional return location for an error
  *
  * Gets the list of history.
  *
@@ -4308,8 +4420,8 @@ g_ptr_array_copy (GPtrArray *array, GCopyFunc func, gpointer user_data)
 
 /**
  * fu_engine_get_remotes:
- * @self: A #FuEngine
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @error: (nullable): optional return location for an error
  *
  * Gets the list of remotes in use by the engine.
  *
@@ -4338,9 +4450,9 @@ fu_engine_get_remotes (FuEngine *self, GError **error)
 
 /**
  * fu_engine_get_remote_by_id:
- * @self: A #FuEngine
- * @remote_id: A string representation of a remote
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @remote_id: a string representation of a remote
+ * @error: (nullable): optional return location for an error
  *
  * Gets the FwupdRemote object.
  *
@@ -4582,7 +4694,8 @@ fu_engine_get_releases_for_device (FuEngine *self,
 	}
 
 	/* only show devices that can be updated */
-	if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE)) {
+	if (!fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE) &&
+	    !fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN)) {
 		g_set_error_literal (error,
 				     FWUPD_ERROR,
 				     FWUPD_ERROR_NOT_SUPPORTED,
@@ -4669,10 +4782,10 @@ fu_engine_get_releases_for_device (FuEngine *self,
 
 /**
  * fu_engine_get_releases:
- * @self: A #FuEngine
- * @request: A #FuEngineRequest
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @request: a #FuEngineRequest
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Gets the releases available for a specific device.
  *
@@ -4713,10 +4826,10 @@ fu_engine_get_releases (FuEngine *self,
 
 /**
  * fu_engine_get_downgrades:
- * @self: A #FuEngine
- * @request: A #FuEngineRequest
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @request: a #FuEngineRequest
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Gets the downgrades available for a specific device.
  *
@@ -4922,10 +5035,10 @@ fu_engine_self_sign (FuEngine *self,
 
 /**
  * fu_engine_get_upgrades:
- * @self: A #FuEngine
- * @request: A #FuEngineRequest
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @request: a #FuEngineRequest
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Gets the upgrades available for a specific device.
  *
@@ -5035,9 +5148,9 @@ fu_engine_get_upgrades (FuEngine *self,
 
 /**
  * fu_engine_clear_results:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Clear the historical state of a specific device operation.
  *
@@ -5083,13 +5196,13 @@ fu_engine_clear_results (FuEngine *self, const gchar *device_id, GError **error)
 
 /**
  * fu_engine_get_results:
- * @self: A #FuEngine
- * @device_id: A device ID
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @device_id: a device ID
+ * @error: (nullable): optional return location for an error
  *
  * Gets the historical state of a specific device operation.
  *
- * Returns: (transfer container): a #FwupdDevice, or %NULL
+ * Returns: (transfer container): a device, or %NULL
  **/
 FwupdDevice *
 fu_engine_get_results (FuEngine *self, const gchar *device_id, GError **error)
@@ -5127,12 +5240,6 @@ fu_engine_plugins_setup (FuEngine *self)
 	for (guint i = 0; i < plugins->len; i++) {
 		g_autoptr(GError) error = NULL;
 		FuPlugin *plugin = g_ptr_array_index (plugins, i);
-		if (fu_plugin_has_flag (plugin, FWUPD_PLUGIN_FLAG_REQUIRE_HWID)) {
-			fu_plugin_add_flag (plugin, FWUPD_PLUGIN_FLAG_DISABLED);
-			g_message ("disabling plugin %s because no HwId",
-				   fu_plugin_get_name (plugin));
-			continue;
-		}
 		if (!fu_plugin_runner_startup (plugin, &error)) {
 			fu_plugin_add_flag (plugin, FWUPD_PLUGIN_FLAG_DISABLED);
 			if (g_error_matches (error,
@@ -5146,13 +5253,10 @@ fu_engine_plugins_setup (FuEngine *self)
 }
 
 static void
-fu_engine_plugins_coldplug (FuEngine *self, gboolean is_recoldplug)
+fu_engine_plugins_coldplug (FuEngine *self)
 {
 	GPtrArray *plugins;
 	g_autoptr(GString) str = g_string_new (NULL);
-
-	/* don't allow coldplug to be scheduled when in coldplug */
-	self->coldplug_running = TRUE;
 
 	/* prepare */
 	plugins = fu_plugin_list_get_all (self->plugin_list);
@@ -5163,25 +5267,14 @@ fu_engine_plugins_coldplug (FuEngine *self, gboolean is_recoldplug)
 			g_warning ("failed to prepare coldplug: %s", error->message);
 	}
 
-	/* do this in one place */
-	if (self->coldplug_delay > 0) {
-		g_debug ("sleeping for %ums", self->coldplug_delay);
-		g_usleep (self->coldplug_delay * 1000);
-	}
-
 	/* exec */
 	for (guint i = 0; i < plugins->len; i++) {
 		g_autoptr(GError) error = NULL;
 		FuPlugin *plugin = g_ptr_array_index (plugins, i);
-		if (is_recoldplug) {
-			if (!fu_plugin_runner_recoldplug (plugin, &error))
-				g_message ("failed recoldplug: %s", error->message);
-		} else {
-			if (!fu_plugin_runner_coldplug (plugin, &error)) {
-				fu_plugin_add_flag (plugin, FWUPD_PLUGIN_FLAG_DISABLED);
-				g_message ("disabling plugin because: %s",
-					   error->message);
-			}
+		if (!fu_plugin_runner_coldplug (plugin, &error)) {
+			fu_plugin_add_flag (plugin, FWUPD_PLUGIN_FLAG_DISABLED);
+			g_message ("disabling plugin because: %s",
+				   error->message);
 		}
 	}
 
@@ -5204,9 +5297,6 @@ fu_engine_plugins_coldplug (FuEngine *self, gboolean is_recoldplug)
 		g_string_truncate (str, str->len - 2);
 		g_debug ("using plugins: %s", str->str);
 	}
-
-	/* we can recoldplug from this point on */
-	self->coldplug_running = FALSE;
 }
 
 static void
@@ -5363,7 +5453,8 @@ fu_engine_device_inherit_history (FuEngine *self, FuDevice *device)
 	/* the device is still running the old firmware version and so if it
 	 * required activation before, it still requires it now -- note:
 	 * we can't just check for version_new=version to allow for re-installs */
-	if (fu_device_has_flag (device_history, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION)) {
+	if (fu_device_has_internal_flag (device, FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION) &&
+	    fu_device_has_flag (device_history, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION)) {
 		FwupdRelease *release = fu_device_get_release_default (device_history);
 		if (fu_common_vercmp_full (fu_device_get_version (device),
 					   fwupd_release_get_version (release),
@@ -5505,16 +5596,6 @@ fu_engine_add_device (FuEngine *self, FuDevice *device)
 }
 
 static void
-fu_engine_plugin_add_firmware_gtype_cb (FuPlugin *plugin,
-					const gchar *id,
-					GType gtype,
-					gpointer user_data)
-{
-	FuEngine *self = FU_ENGINE (user_data);
-	fu_engine_add_firmware_gtype (self, id, gtype);
-}
-
-static void
 fu_engine_plugin_rules_changed_cb (FuPlugin *plugin, gpointer user_data)
 {
 	FuEngine *self = FU_ENGINE (user_data);
@@ -5528,7 +5609,7 @@ fu_engine_plugin_rules_changed_cb (FuPlugin *plugin, gpointer user_data)
 }
 
 static void
-fu_engine_plugin_security_changed_cb (FuPlugin *plugin, gpointer user_data)
+fu_engine_context_security_changed_cb (FuContext *ctx, gpointer user_data)
 {
 	FuEngine *self = FU_ENGINE (user_data);
 
@@ -5581,53 +5662,6 @@ fu_engine_plugin_device_removed_cb (FuPlugin *plugin,
 	/* make the UI update */
 	fu_device_list_remove (self->device_list, device);
 	fu_engine_emit_changed (self);
-}
-
-static gboolean
-fu_engine_recoldplug_delay_cb (gpointer user_data)
-{
-	FuEngine *self = (FuEngine *) user_data;
-	g_debug ("recoldplugging");
-	fu_engine_plugins_coldplug (self, TRUE);
-	self->coldplug_id = 0;
-	return FALSE;
-}
-
-static void
-fu_engine_plugin_recoldplug_cb (FuPlugin *plugin, FuEngine *self)
-{
-	if (self->coldplug_running) {
-		g_warning ("coldplug already running, cannot recoldplug");
-		return;
-	}
-	if (self->app_flags & FU_APP_FLAGS_NO_IDLE_SOURCES) {
-		g_debug ("doing direct recoldplug");
-		fu_engine_plugins_coldplug (self, TRUE);
-		for (guint i = 0; i < self->backends->len; i++) {
-			FuBackend *backend = g_ptr_array_index (self->backends, i);
-			g_autoptr(GError) error_local = NULL;
-			if (!fu_backend_get_enabled (backend))
-				continue;
-			if (!fu_backend_recoldplug (backend, &error_local)) {
-				g_warning ("failed to recoldplug: %s",
-					   error_local->message);
-				continue;
-			}
-		}
-		return;
-	}
-	g_debug ("scheduling a recoldplug");
-	if (self->coldplug_id != 0)
-		g_source_remove (self->coldplug_id);
-	self->coldplug_id = g_timeout_add (1500, fu_engine_recoldplug_delay_cb, self);
-}
-
-static void
-fu_engine_plugin_set_coldplug_delay_cb (FuPlugin *plugin, guint duration, FuEngine *self)
-{
-	self->coldplug_delay = MAX (self->coldplug_delay, duration);
-	g_debug ("got coldplug delay of %ums, global maximum is now %ums",
-		 duration, self->coldplug_delay);
 }
 
 /* this is called by the self tests as well */
@@ -5716,7 +5750,7 @@ fu_engine_get_host_product (FuEngine *self)
 {
 	const gchar *result = NULL;
 	g_return_val_if_fail (FU_IS_ENGINE (self), NULL);
-	result = fu_hwids_get_value (self->hwids, FU_HWIDS_KEY_PRODUCT_NAME);
+	result = fu_context_get_hwid_value (self->ctx, FU_HWIDS_KEY_PRODUCT_NAME);
 	return result != NULL ? result : "Unknown Product";
 }
 
@@ -5763,16 +5797,13 @@ static gchar *
 fu_engine_attrs_calculate_hsi_for_chassis (FuEngine *self)
 {
 	guint val;
-	g_autoptr(GError) error = NULL;
 
 	/* get chassis type from SMBIOS data */
-	val = fu_smbios_get_integer (self->smbios,
-				     FU_SMBIOS_STRUCTURE_TYPE_CHASSIS,
-				     0x05, &error);
-	if (val == G_MAXUINT) {
-		g_warning ("failed to get chassis type: %s", error->message);
+	val = fu_context_get_smbios_integer (self->ctx,
+					     FU_SMBIOS_STRUCTURE_TYPE_CHASSIS,
+					     0x05);
+	if (val == G_MAXUINT)
 		return g_strdup ("HSI-INVALID:chassis");
-	}
 
 	/* verify HSI makes sense for this chassis type */
 	switch (val) {
@@ -5809,6 +5840,7 @@ static void
 fu_engine_ensure_security_attrs (FuEngine *self)
 {
 	GPtrArray *plugins = fu_plugin_list_get_all (self->plugin_list);
+	g_autoptr(GPtrArray) devices = fu_device_list_get_all (self->device_list);
 	g_autoptr(GPtrArray) items = NULL;
 
 	/* already valid */
@@ -5820,6 +5852,12 @@ fu_engine_ensure_security_attrs (FuEngine *self)
 
 	/* built in */
 	fu_engine_ensure_security_attrs_tainted (self);
+
+	/* call into devices */
+	for (guint i = 0; i < devices->len; i++) {
+		FuDevice *device = g_ptr_array_index (devices, i);
+		fu_device_add_security_attrs (device, self->host_security_attrs);
+	}
 
 	/* call into plugins */
 	for (guint j = 0; j < plugins->len; j++) {
@@ -5886,6 +5924,7 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 		g_autofree gchar *name = NULL;
 		g_autoptr(FuPlugin) plugin = NULL;
 		g_autoptr(GError) error_local = NULL;
+		g_autoptr(GPtrArray) firmware_gtypes = NULL;
 
 		/* ignore non-plugins */
 		if (!g_str_has_suffix (fn, suffix))
@@ -5903,20 +5942,12 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 
 		/* open module */
 		filename = g_build_filename (plugin_path, fn, NULL);
-		plugin = fu_plugin_new ();
+		plugin = fu_plugin_new (self->ctx);
 		fu_plugin_set_name (plugin, name);
-		fu_plugin_set_hwids (plugin, self->hwids);
-		fu_plugin_set_smbios (plugin, self->smbios);
-		fu_plugin_set_udev_subsystems (plugin, self->udev_subsystems);
-		fu_plugin_set_quirks (plugin, self->quirks);
-		fu_plugin_set_runtime_versions (plugin, self->runtime_versions);
-		fu_plugin_set_compile_versions (plugin, self->compile_versions);
-		g_signal_connect (plugin, "add-firmware-gtype",
-				  G_CALLBACK (fu_engine_plugin_add_firmware_gtype_cb),
-				  self);
 
 		/* if loaded from fu_engine_load() open the plugin */
-		if (g_hash_table_size (self->firmware_gtypes) > 0) {
+		firmware_gtypes = fu_context_get_firmware_gtype_ids (self->ctx);
+		if (firmware_gtypes->len > 0) {
 			if (!fu_plugin_open (plugin, filename, &error_local)) {
 				g_warning ("cannot load: %s", error_local->message);
 				fu_engine_add_plugin (self, plugin);
@@ -5940,20 +5971,11 @@ fu_engine_load_plugins (FuEngine *self, GError **error)
 		g_signal_connect (plugin, "device-register",
 				  G_CALLBACK (fu_engine_plugin_device_register_cb),
 				  self);
-		g_signal_connect (plugin, "recoldplug",
-				  G_CALLBACK (fu_engine_plugin_recoldplug_cb),
-				  self);
-		g_signal_connect (plugin, "set-coldplug-delay",
-				  G_CALLBACK (fu_engine_plugin_set_coldplug_delay_cb),
-				  self);
 		g_signal_connect (plugin, "check-supported",
 				  G_CALLBACK (fu_engine_plugin_check_supported_cb),
 				  self);
 		g_signal_connect (plugin, "rules-changed",
 				  G_CALLBACK (fu_engine_plugin_rules_changed_cb),
-				  self);
-		g_signal_connect (plugin, "security-changed",
-				  G_CALLBACK (fu_engine_plugin_security_changed_cb),
 				  self);
 
 		/* add */
@@ -6042,7 +6064,7 @@ fu_engine_backend_device_added_cb (FuBackend *backend, FuDevice *device, FuEngin
 	}
 
 	/* add any extra quirks */
-	fu_device_set_quirks (device, self->quirks);
+	fu_device_set_context (device, self->ctx);
 	if (!fu_device_probe (device, &error_local)) {
 		g_warning ("failed to probe device %s: %s",
 			   fu_device_get_backend_id (device),
@@ -6135,7 +6157,7 @@ fu_engine_load_quirks_for_hwid (FuEngine *self, const gchar *hwid)
 	g_auto(GStrv) plugins = NULL;
 
 	/* does prefixed quirk exist */
-	value = fu_quirks_lookup_by_id (self->quirks, hwid, FU_QUIRKS_PLUGIN);
+	value = fu_context_lookup_quirk_by_id (self->ctx, hwid, FU_QUIRKS_PLUGIN);
 	if (value == NULL)
 		return;
 	plugins = g_strsplit (value, ",", -1);
@@ -6156,36 +6178,20 @@ fu_engine_load_quirks_for_hwid (FuEngine *self, const gchar *hwid)
 static void
 fu_engine_load_quirks (FuEngine *self, FuQuirksLoadFlags quirks_flags)
 {
-	GPtrArray *hwids = fu_hwids_get_guids (self->hwids);
+	GPtrArray *guids = fu_context_get_hwid_guids (self->ctx);
 	g_autoptr(GError) error = NULL;
 
 	/* rebuild silo if required */
-	if (!fu_quirks_load (self->quirks, quirks_flags, &error)) {
+	if (!fu_context_load_quirks (self->ctx, quirks_flags, &error)) {
 		g_warning ("Failed to load quirks: %s", error->message);
 		return;
 	}
 
 	/* search each hwid */
-	for (guint i = 0; i < hwids->len; i++) {
-		const gchar *hwid = g_ptr_array_index (hwids, i);
+	for (guint i = 0; i < guids->len; i++) {
+		const gchar *hwid = g_ptr_array_index (guids, i);
 		fu_engine_load_quirks_for_hwid (self, hwid);
 	}
-}
-
-static void
-fu_engine_load_smbios (FuEngine *self)
-{
-	g_autoptr(GError) error = NULL;
-	if (!fu_smbios_setup (self->smbios, &error))
-		g_warning ("Failed to load SMBIOS: %s", error->message);
-}
-
-static void
-fu_engine_load_hwids (FuEngine *self)
-{
-	g_autoptr(GError) error = NULL;
-	if (!fu_hwids_setup (self->hwids, self->smbios, &error))
-		g_warning ("Failed to load HWIDs: %s", error->message);
 }
 
 static gboolean
@@ -6344,9 +6350,9 @@ fu_engine_ensure_client_certificate (FuEngine *self)
 
 /**
  * fu_engine_load:
- * @self: A #FuEngine
- * @flags: #FuEngineLoadFlags, e.g. %FU_ENGINE_LOAD_FLAG_READONLY
- * @error: A #GError, or %NULL
+ * @self: a #FuEngine
+ * @flags: engine load flags, e.g. %FU_ENGINE_LOAD_FLAG_READONLY
+ * @error: (nullable): optional return location for an error
  *
  * Load the firmware update engine so it is ready for use.
  *
@@ -6369,6 +6375,26 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	/* avoid re-loading a second time if fu-tool or fu-util request to */
 	if (self->loaded)
 		return TRUE;
+
+	/* sanity check libraries are in sync with daemon */
+	if (g_strcmp0 (fwupd_version_string (), VERSION) != 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_INVAL,
+			     "libfwupd version %s does not match daemon %s",
+			     fwupd_version_string (),
+			     VERSION);
+		return FALSE;
+	}
+	if (g_strcmp0 (fu_version_string (), VERSION) != 0) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_INVAL,
+			     "libfwupdplugin version %s does not match daemon %s",
+			     fu_version_string (),
+			     VERSION);
+		return FALSE;
+	}
 
 /* TODO: Read registry key [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography] "MachineGuid" */
 #ifndef _WIN32
@@ -6430,10 +6456,8 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 		fu_idle_set_timeout (self->idle, fu_config_get_idle_timeout (self->config));
 
 	/* load SMBIOS and the hwids */
-	if (flags & FU_ENGINE_LOAD_FLAG_HWINFO) {
-		fu_engine_load_smbios (self);
-		fu_engine_load_hwids (self);
-	}
+	if (flags & FU_ENGINE_LOAD_FLAG_HWINFO)
+		fu_context_load_hwinfo (self->ctx, NULL);
 
 	/* load AppStream metadata */
 	if (!fu_engine_load_metadata_store (self, flags, error)) {
@@ -6442,14 +6466,13 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	}
 
 	/* add the "built-in" firmware types */
-	fu_engine_add_firmware_gtype (self, "raw", FU_TYPE_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "dfu", FU_TYPE_DFU_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "dfuse", FU_TYPE_DFUSE_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "fmap", FU_TYPE_FMAP_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "ifd", FU_TYPE_IFD_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "ihex", FU_TYPE_IHEX_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "srec", FU_TYPE_SREC_FIRMWARE);
-	fu_engine_add_firmware_gtype (self, "smbios", FU_TYPE_SMBIOS);
+	fu_context_add_firmware_gtype (self->ctx, "raw", FU_TYPE_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "dfu", FU_TYPE_DFU_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "dfuse", FU_TYPE_DFUSE_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "fmap", FU_TYPE_FMAP_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "ihex", FU_TYPE_IHEX_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "srec", FU_TYPE_SREC_FIRMWARE);
+	fu_context_add_firmware_gtype (self->ctx, "smbios", FU_TYPE_SMBIOS);
 
 	/* set up backends */
 	for (guint i = 0; i < self->backends->len; i++) {
@@ -6503,7 +6526,7 @@ fu_engine_load (FuEngine *self, FuEngineLoadFlags flags, GError **error)
 	/* add devices */
 	fu_engine_plugins_setup (self);
 	if (flags & FU_ENGINE_LOAD_FLAG_COLDPLUG)
-		fu_engine_plugins_coldplug (self, FALSE);
+		fu_engine_plugins_coldplug (self);
 
 	/* coldplug backends */
 	if (flags & FU_ENGINE_LOAD_FLAG_COLDPLUG) {
@@ -6590,9 +6613,7 @@ fu_engine_add_runtime_version (FuEngine *self,
 			       const gchar *component_id,
 			       const gchar *version)
 {
-	g_hash_table_insert (self->runtime_versions,
-			     g_strdup (component_id),
-			     g_strdup (version));
+	fu_context_add_runtime_version (self->ctx, component_id, version);
 }
 
 void
@@ -6600,6 +6621,18 @@ fu_engine_add_app_flag (FuEngine *self, FuAppFlags app_flags)
 {
 	g_return_if_fail (FU_IS_ENGINE (self));
 	self->app_flags |= app_flags;
+}
+
+static void
+fu_engine_context_battery_changed_cb (FuContext *ctx, GParamSpec *pspec, FuEngine *self)
+{
+	g_autoptr(GPtrArray) devices = fu_device_list_get_all (self->device_list);
+
+	/* apply policy on any existing devices */
+	for (guint i = 0; i < devices->len; i++) {
+		FuDevice *device = g_ptr_array_index (devices, i);
+		fu_engine_ensure_device_battery_inhibit (self, device);
+	}
 }
 
 static void
@@ -6625,19 +6658,31 @@ fu_engine_init (FuEngine *self)
 	self->config = fu_config_new ();
 	self->remote_list = fu_remote_list_new ();
 	self->device_list = fu_device_list_new ();
-	self->smbios = fu_smbios_new ();
-	self->hwids = fu_hwids_new ();
+	self->ctx = fu_context_new ();
 	self->idle = fu_idle_new ();
-	self->quirks = fu_quirks_new ();
 	self->history = fu_history_new ();
 	self->plugin_list = fu_plugin_list_new ();
 	self->plugin_filter = g_ptr_array_new_with_free_func (g_free);
 	self->host_security_attrs = fu_security_attrs_new ();
-	self->udev_subsystems = g_ptr_array_new_with_free_func (g_free);
 	self->backends = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	self->runtime_versions = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
 	self->compile_versions = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
-	self->firmware_gtypes = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+	fu_context_set_runtime_versions (self->ctx, self->runtime_versions);
+	fu_context_set_compile_versions (self->ctx, self->compile_versions);
+
+	g_signal_connect (self->ctx, "security-changed",
+			  G_CALLBACK (fu_engine_context_security_changed_cb),
+			  self);
+	g_signal_connect (self->ctx, "notify::battery-state",
+			  G_CALLBACK (fu_engine_context_battery_changed_cb),
+			  self);
+	g_signal_connect (self->ctx, "notify::battery-level",
+			  G_CALLBACK (fu_engine_context_battery_changed_cb),
+			  self);
+	g_signal_connect (self->ctx, "notify::battery-threshold",
+			  G_CALLBACK (fu_engine_context_battery_changed_cb),
+			  self);
 
 	g_signal_connect (self->config, "changed",
 			  G_CALLBACK (fu_engine_config_changed_cb),
@@ -6654,7 +6699,7 @@ fu_engine_init (FuEngine *self)
 	g_ptr_array_add (self->backends, fu_usb_backend_new ());
 #endif
 #ifdef HAVE_GUDEV
-	g_ptr_array_add (self->backends, fu_udev_backend_new (self->udev_subsystems));
+	g_ptr_array_add (self->backends, fu_udev_backend_new (fu_context_get_udev_subsystems (self->ctx)));
 #endif
 #ifdef HAVE_BLUEZ
 	g_ptr_array_add (self->backends, fu_bluez_backend_new ());
@@ -6721,18 +6766,14 @@ fu_engine_finalize (GObject *obj)
 	g_object_unref (self->idle);
 	g_object_unref (self->config);
 	g_object_unref (self->remote_list);
-	g_object_unref (self->smbios);
-	g_object_unref (self->quirks);
-	g_object_unref (self->hwids);
+	g_object_unref (self->ctx);
 	g_object_unref (self->history);
 	g_object_unref (self->device_list);
 	g_object_unref (self->jcat_context);
 	g_ptr_array_unref (self->plugin_filter);
-	g_ptr_array_unref (self->udev_subsystems);
 	g_ptr_array_unref (self->backends);
 	g_hash_table_unref (self->runtime_versions);
 	g_hash_table_unref (self->compile_versions);
-	g_hash_table_unref (self->firmware_gtypes);
 	g_object_unref (self->plugin_list);
 
 	G_OBJECT_CLASS (fu_engine_parent_class)->finalize (obj);

@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include <xmlb.h>
-#include <fwupd.h>
 #include <fwupdplugin.h>
 #include <glib-object.h>
 #include <glib/gstdio.h>
@@ -26,7 +25,6 @@
 #include "fu-progressbar.h"
 #include "fu-hash.h"
 #include "fu-security-attr.h"
-#include "fu-security-attrs.h"
 #include "fu-smbios-private.h"
 
 typedef struct {
@@ -159,7 +157,7 @@ fu_plugin_hash_func (gconstpointer user_data)
 	GError *error = NULL;
 	g_autofree gchar *pluginfn = NULL;
 	g_autoptr(FuEngine) engine = fu_engine_new (FU_APP_FLAGS_NONE);
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuPlugin) plugin = fu_plugin_new (NULL);
 	gboolean ret = FALSE;
 
 	ret = fu_engine_load (engine, FU_ENGINE_LOAD_FLAG_NONE, &error);
@@ -583,7 +581,7 @@ fu_engine_requirements_device_func (gconstpointer user_data)
 		"    <firmware compare=\"ge\" version=\"1.2.3\"/>"
 		"    <firmware compare=\"eq\" version=\"4.5.6\">bootloader</firmware>"
 		"    <firmware compare=\"regex\" version=\"USB:0xFFFF|DMI:Lenovo\">vendor-id</firmware>"
-#ifndef _WIN32
+#ifdef __linux__
 		"    <id compare=\"ge\" version=\"4.0.0\">org.kernel</id>"
 #endif
 		"  </requires>"
@@ -720,6 +718,110 @@ fu_engine_requirements_version_format_func (gconstpointer user_data)
 	g_assert_nonnull (g_strstr_len (error->message, -1,
 					"Firmware version formats were different"));
 	g_assert (!ret);
+}
+
+static void
+fu_engine_requirements_sibling_device_func (gconstpointer user_data)
+{
+	gboolean ret;
+	g_autoptr(FuDevice) device1 = fu_device_new ();
+	g_autoptr(FuDevice) device2 = fu_device_new ();
+	g_autoptr(FuDevice) unrelated_device3 = fu_device_new ();
+	g_autoptr(FuDevice) parent = fu_device_new ();
+	g_autoptr(FuEngine) engine = fu_engine_new (FU_APP_FLAGS_NONE);
+	g_autoptr(FuEngineRequest) request = fu_engine_request_new ();
+	g_autoptr(FuInstallTask) task = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(XbNode) component = NULL;
+	g_autoptr(XbSilo) silo = NULL;
+	g_autoptr(XbSilo) silo_empty = xb_silo_new ();
+	const gchar *xml =
+		"<component>"
+		"  <requires>"
+		"    <firmware depth=\"0\">1ff60ab2-3905-06a1-b476-0371f00c9e9b</firmware>"
+		"  </requires>"
+		"  <provides>"
+		"    <firmware type=\"flashed\">12345678-1234-1234-1234-123456789012</firmware>"
+		"  </provides>"
+		"  <releases>"
+		"    <release version=\"1.2.4\">"
+		"      <checksum type=\"sha1\" filename=\"bios.bin\" target=\"content\"/>"
+		"    </release>"
+		"  </releases>"
+		"</component>";
+
+	/* no metadata in daemon */
+	fu_engine_set_silo (engine, silo_empty);
+
+	/* set up a dummy device */
+	fu_device_set_id (device1, "id1");
+	fu_device_set_version_format (device1, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version (device1, "1.2.3");
+	fu_device_add_vendor_id (device1, "FFFF");
+	fu_device_add_flag (device1, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_guid (device1, "12345678-1234-1234-1234-123456789012");
+	fu_device_add_protocol (device1, "com.acme");
+	fu_engine_add_device (engine, device1);
+
+	/* setup the parent */
+	fu_device_set_id (parent, "parent");
+	fu_device_set_version_format (parent, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version (parent, "1.0.0");
+	fu_device_add_flag (parent, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_guid (parent, "42f3d696-0b6f-4d69-908f-357f98ef115e");
+	fu_device_add_protocol (parent, "com.acme");
+	fu_device_add_child (parent, device1);
+	fu_engine_add_device (engine, parent);
+
+	/* set up a different device */
+	fu_device_set_id (unrelated_device3, "id3");
+	fu_device_add_vendor_id (unrelated_device3, "USB:FFFF");
+	fu_device_add_protocol (unrelated_device3, "com.acme");
+	fu_device_set_name (unrelated_device3, "Foo bar device");
+	fu_device_set_version_format (unrelated_device3, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version (unrelated_device3, "1.5.3");
+	fu_device_add_vendor_id (unrelated_device3, "FFFF");
+	fu_device_add_flag (unrelated_device3, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_guid (unrelated_device3, "3e455c08-352e-4a16-84d3-f04287289fa2");
+	fu_engine_add_device (engine, unrelated_device3);
+
+	/* import firmware metainfo */
+	silo = xb_silo_new_from_xml (xml, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (silo);
+	component = xb_silo_query_first (silo, "component", &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (component);
+
+	/* check this fails */
+	task = fu_install_task_new (device1, component);
+	ret = fu_engine_check_requirements (engine, request, task,
+					    FWUPD_INSTALL_FLAG_NONE,
+					    &error);
+	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED);
+	g_assert_false (ret);
+	g_clear_error (&error);
+
+	/* set up a sibling device */
+	fu_device_set_id (device2, "id2");
+	fu_device_add_vendor_id (device2, "USB:FFFF");
+	fu_device_add_protocol (device2, "com.acme");
+	fu_device_set_name (device2, "Secondary firmware");
+	fu_device_set_version_format (device2, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version (device2, "4.5.6");
+	fu_device_add_vendor_id (device2, "FFFF");
+	fu_device_add_flag (device2, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_add_guid (device2, "1ff60ab2-3905-06a1-b476-0371f00c9e9b");
+	fu_device_add_child (parent, device2);
+	fu_engine_add_device (engine, device2);
+
+	/* check this passes */
+	task = fu_install_task_new (device1, component);
+	ret = fu_engine_check_requirements (engine, request, task,
+					    FWUPD_INSTALL_FLAG_NONE,
+					    &error);
+	g_assert_no_error (error);
+	g_assert (ret);
 }
 
 static void
@@ -1003,7 +1105,7 @@ fu_engine_partial_hash_func (gconstpointer user_data)
 	g_autoptr(FuDevice) device1 = fu_device_new ();
 	g_autoptr(FuDevice) device2 = fu_device_new ();
 	g_autoptr(FuEngine) engine = fu_engine_new (FU_APP_FLAGS_NONE);
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuPlugin) plugin = fu_plugin_new (NULL);
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GError) error_none = NULL;
 	g_autoptr(GError) error_both = NULL;
@@ -1730,6 +1832,7 @@ fu_engine_history_inherit (gconstpointer user_data)
 	fu_engine_set_silo (engine, silo_empty);
 	fu_engine_add_plugin (engine, self->plugin);
 	device = fu_device_new ();
+	fu_device_add_internal_flag (device, FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION);
 	fu_device_set_id (device, "test_device");
 	fu_device_add_vendor_id (device, "USB:FFFF");
 	fu_device_add_protocol (device, "com.acme");
@@ -1739,6 +1842,24 @@ fu_engine_history_inherit (gconstpointer user_data)
 	fu_device_set_version (device, "1.2.2");
 	fu_engine_add_device (engine, device);
 	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION));
+
+	/* emulate not getting the flag */
+	g_object_unref (engine);
+	g_object_unref (device);
+	engine = fu_engine_new (FU_APP_FLAGS_NONE);
+	fu_engine_set_silo (engine, silo_empty);
+	fu_engine_add_plugin (engine, self->plugin);
+	device = fu_device_new ();
+	fu_device_set_id (device, "test_device");
+	fu_device_add_vendor_id (device, "USB:FFFF");
+	fu_device_add_protocol (device, "com.acme");
+	fu_device_set_name (device, "Test Device");
+	fu_device_add_guid (device, "12345678-1234-1234-1234-123456789012");
+	fu_device_set_version_format (device, FWUPD_VERSION_FORMAT_TRIPLET);
+	fu_device_set_version (device, "1.2.2");
+	fu_engine_add_device (engine, device);
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_NEEDS_ACTIVATION));
+
 }
 
 static void
@@ -2266,8 +2387,8 @@ fu_plugin_list_func (gconstpointer user_data)
 	GPtrArray *plugins;
 	FuPlugin *plugin;
 	g_autoptr(FuPluginList) plugin_list = fu_plugin_list_new ();
-	g_autoptr(FuPlugin) plugin1 = fu_plugin_new ();
-	g_autoptr(FuPlugin) plugin2 = fu_plugin_new ();
+	g_autoptr(FuPlugin) plugin1 = fu_plugin_new (NULL);
+	g_autoptr(FuPlugin) plugin2 = fu_plugin_new (NULL);
 	g_autoptr(GError) error = NULL;
 
 	fu_plugin_set_name (plugin1, "plugin1");
@@ -2298,8 +2419,8 @@ fu_plugin_list_depsolve_func (gconstpointer user_data)
 	FuPlugin *plugin;
 	gboolean ret;
 	g_autoptr(FuPluginList) plugin_list = fu_plugin_list_new ();
-	g_autoptr(FuPlugin) plugin1 = fu_plugin_new ();
-	g_autoptr(FuPlugin) plugin2 = fu_plugin_new ();
+	g_autoptr(FuPlugin) plugin1 = fu_plugin_new (NULL);
+	g_autoptr(FuPlugin) plugin2 = fu_plugin_new (NULL);
 	g_autoptr(GError) error = NULL;
 
 	fu_plugin_set_name (plugin1, "plugin1");
@@ -3044,7 +3165,7 @@ main (int argc, char **argv)
 	fu_self_test_mkroot ();
 
 	/* load the test plugin */
-	self->plugin = fu_plugin_new ();
+	self->plugin = fu_plugin_new (NULL);
 	pluginfn = g_build_filename (PLUGINBUILDDIR,
 				     "libfu_plugin_test." G_MODULE_SUFFIX,
 				     NULL);
@@ -3133,6 +3254,8 @@ main (int argc, char **argv)
 			      fu_engine_generate_md_func);
 	g_test_add_data_func ("/fwupd/engine{requirements-other-device}", self,
 			      fu_engine_requirements_other_device_func);
+	g_test_add_data_func ("/fwupd/engine{fu_engine_requirements_sibling_device_func}", self,
+			      fu_engine_requirements_sibling_device_func);
 	g_test_add_data_func ("/fwupd/plugin{composite}", self,
 			      fu_plugin_composite_func);
 	g_test_add_data_func ("/fwupd/history", self,

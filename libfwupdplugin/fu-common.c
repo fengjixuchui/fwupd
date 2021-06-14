@@ -13,14 +13,8 @@
 #endif
 #include <glib/gstdio.h>
 
-#ifdef HAVE_FNMATCH_H
-#include <fnmatch.h>
-#elif _WIN32
-#include <shlwapi.h>
-#endif
-
-#ifdef _WIN32
-#include <sysinfoapi.h>
+#ifdef HAVE_KENV_H
+#include <kenv.h>
 #endif
 
 #ifdef HAVE_CPUID_H
@@ -39,29 +33,14 @@
 
 #include "fwupd-error.h"
 
-#include "fu-common.h"
+#include "fu-common-private.h"
+#include "fu-firmware.h"
 #include "fu-volume-private.h"
-
-#define UDISKS_DBUS_SERVICE			"org.freedesktop.UDisks2"
-#define UDISKS_DBUS_PATH			"/org/freedesktop/UDisks2/Manager"
-#define UDISKS_DBUS_MANAGER_INTERFACE		"org.freedesktop.UDisks2.Manager"
-#define UDISKS_DBUS_INTERFACE_PARTITION 	"org.freedesktop.UDisks2.Partition"
-#define UDISKS_DBUS_INTERFACE_FILESYSTEM	"org.freedesktop.UDisks2.Filesystem"
-#define UDISKS_DBUS_INTERFACE_BLOCK		"org.freedesktop.UDisks2.Block"
-
-/**
- * SECTION:fu-common
- * @short_description: common functionality for plugins to use
- *
- * Helper functions that can be used by the daemon and plugins.
- *
- * See also: #FuPlugin
- */
 
 /**
  * fu_common_rmtree:
  * @directory: a directory name
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Recursively removes a directory.
  *
@@ -139,7 +118,7 @@ fu_common_get_file_list_internal (GPtrArray *files, const gchar *directory, GErr
 /**
  * fu_common_get_files_recursive:
  * @path: a directory name
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Returns every file found under @directory, and any subdirectory.
  * If any path under @directory cannot be accessed due to permissions an error
@@ -163,8 +142,8 @@ fu_common_get_files_recursive (const gchar *path, GError **error)
 }
 /**
  * fu_common_mkdir_parent:
- * @filename: A full pathname
- * @error: A #GError, or %NULL
+ * @filename: a full pathname
+ * @error: (nullable): optional return location for an error
  *
  * Creates any required directories, including any parent directories.
  *
@@ -196,9 +175,9 @@ fu_common_mkdir_parent (const gchar *filename, GError **error)
 
 /**
  * fu_common_set_contents_bytes:
- * @filename: A filename
- * @bytes: The data to write
- * @error: A #GError, or %NULL
+ * @filename: a filename
+ * @bytes: data to write
+ * @error: (nullable): optional return location for an error
  *
  * Writes a blob of data to a filename, creating the parent directories as
  * required.
@@ -232,8 +211,8 @@ fu_common_set_contents_bytes (const gchar *filename, GBytes *bytes, GError **err
 
 /**
  * fu_common_get_contents_bytes:
- * @filename: A filename
- * @error: A #GError, or %NULL
+ * @filename: a filename
+ * @error: (nullable): optional return location for an error
  *
  * Reads a blob of data from a file.
  *
@@ -258,9 +237,9 @@ fu_common_get_contents_bytes (const gchar *filename, GError **error)
 
 /**
  * fu_common_get_contents_fd:
- * @fd: A file descriptor
- * @count: The maximum number of bytes to read
- * @error: A #GError, or %NULL
+ * @fd: a file descriptor
+ * @count: the maximum number of bytes to read
+ * @error: (nullable): optional return location for an error
  *
  * Reads a blob from a specific file descriptor.
  *
@@ -348,9 +327,9 @@ fu_common_extract_archive_entry (struct archive_entry *entry, const gchar *dir)
 
 /**
  * fu_common_extract_archive:
- * @blob: a #GBytes archive as a blob
+ * @blob: data archive as a blob
  * @dir: a directory name to extract to
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Extracts an archive to a directory.
  *
@@ -454,8 +433,8 @@ fu_common_add_argv (GPtrArray *argv, const gchar *fmt, ...)
 
 /**
  * fu_common_find_program_in_path:
- * @basename: The program to search
- * @error: A #GError, or %NULL
+ * @basename: the program to search
+ * @error: (nullable): optional return location for an error
  *
  * Looks for a program in the PATH variable
  *
@@ -506,10 +485,10 @@ fu_common_test_namespace_support (GError **error)
 
 /**
  * fu_common_firmware_builder:
- * @bytes: The data to use
+ * @bytes: the data to use
  * @script_fn: Name of the script to run in the tarball, e.g. `startup.sh`
  * @output_fn: Name of the generated firmware, e.g. `firmware.bin`
- * @error: A #GError, or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Builds a firmware file using tools from the host session in a bubblewrap
  * jail. Several things happen during build:
@@ -732,12 +711,12 @@ fu_common_spawn_cancelled_cb (GCancellable *cancellable, FuCommonSpawnHelper *he
 
 /**
  * fu_common_spawn_sync:
- * @argv: The argument list to run
- * @handler_cb: (scope call): A #FuOutputHandler or %NULL
- * @handler_user_data: the user data to pass to @handler_cb
+ * @argv: the argument list to run
+ * @handler_cb: (scope call) (nullable): optional #FuOutputHandler
+ * @handler_user_data: (nullable): the user data to pass to @handler_cb
  * @timeout_ms: a timeout in ms, or 0 for no limit
- * @cancellable: a #GCancellable, or %NULL
- * @error: A #GError or %NULL
+ * @cancellable: (nullable): optional #GCancellable
+ * @error: (nullable): optional return location for an error
  *
  * Runs a subprocess and waits for it to exit. Any output on standard out or
  * standard error will be forwarded to @handler_cb as whole lines.
@@ -801,9 +780,9 @@ fu_common_spawn_sync (const gchar * const * argv,
 
 /**
  * fu_common_write_uint16:
- * @buf: A writable buffer
+ * @buf: a writable buffer
  * @val_native: a value in host byte-order
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Writes a value to a buffer using a specified endian.
  *
@@ -828,9 +807,9 @@ fu_common_write_uint16 (guint8 *buf, guint16 val_native, FuEndianType endian)
 
 /**
  * fu_common_write_uint32:
- * @buf: A writable buffer
+ * @buf: a writable buffer
  * @val_native: a value in host byte-order
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Writes a value to a buffer using a specified endian.
  *
@@ -855,9 +834,9 @@ fu_common_write_uint32 (guint8 *buf, guint32 val_native, FuEndianType endian)
 
 /**
  * fu_common_write_uint64:
- * @buf: A writable buffer
+ * @buf: a writable buffer
  * @val_native: a value in host byte-order
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Writes a value to a buffer using a specified endian.
  *
@@ -882,8 +861,8 @@ fu_common_write_uint64 (guint8 *buf, guint64 val_native, FuEndianType endian)
 
 /**
  * fu_common_read_uint16:
- * @buf: A readable buffer
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @buf: a readable buffer
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Read a value from a buffer using a specified endian.
  *
@@ -911,8 +890,8 @@ fu_common_read_uint16 (const guint8 *buf, FuEndianType endian)
 
 /**
  * fu_common_read_uint32:
- * @buf: A readable buffer
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @buf: a readable buffer
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Read a value from a buffer using a specified endian.
  *
@@ -940,8 +919,8 @@ fu_common_read_uint32 (const guint8 *buf, FuEndianType endian)
 
 /**
  * fu_common_read_uint64:
- * @buf: A readable buffer
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
+ * @buf: a readable buffer
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
  *
  * Read a value from a buffer using a specified endian.
  *
@@ -969,7 +948,7 @@ fu_common_read_uint64 (const guint8 *buf, FuEndianType endian)
 
 /**
  * fu_common_strtoull:
- * @str: A string, e.g. "0x1234"
+ * @str: a string, e.g. `0x1234`
  *
  * Converts a string value to an integer. Values are assumed base 10, unless
  * prefixed with "0x" where they are parsed as base 16.
@@ -993,7 +972,7 @@ fu_common_strtoull (const gchar *str)
 
 /**
  * fu_common_strstrip:
- * @str: A string, e.g. " test "
+ * @str: a string, e.g. ` test `
  *
  * Removes leading and trailing whitespace from a constant string.
  *
@@ -1130,7 +1109,7 @@ fu_common_error_array_get_best (GPtrArray *errors)
 
 /**
  * fu_common_get_path:
- * @path_kind: A #FuPathKind e.g. %FU_PATH_KIND_DATADIR_PKG
+ * @path_kind: a #FuPathKind e.g. %FU_PATH_KIND_DATADIR_PKG
  *
  * Gets a fwupd-specific system path. These can be overridden with various
  * environment variables, for instance %FWUPD_DATADIR.
@@ -1252,6 +1231,9 @@ fu_common_get_path (FuPathKind path_kind)
 			return g_build_filename (tmp, NULL);
 		basedir = fu_common_get_path (FU_PATH_KIND_LOCALSTATEDIR);
 		return g_build_filename (basedir, "cache", PACKAGE_NAME, NULL);
+	/* /run/lock */
+	case FU_PATH_KIND_LOCKDIR:
+		return g_strdup ("/run/lock");
 	case FU_PATH_KIND_OFFLINE_TRIGGER:
 		tmp = g_getenv ("FWUPD_OFFLINE_TRIGGER");
 		if (tmp != NULL)
@@ -1273,9 +1255,9 @@ fu_common_get_path (FuPathKind path_kind)
 
 /**
  * fu_common_string_replace:
- * @string: The #GString to operate on
- * @search: The text to search for
- * @replace: The text to use for substitutions
+ * @string: the #GString to operate on
+ * @search: the text to search for
+ * @replace: the text to use for substitutions
  *
  * Performs multiple search and replace operations on the given string.
  *
@@ -1338,7 +1320,7 @@ fu_common_string_replace (GString *string, const gchar *search, const gchar *rep
 
 /**
  * fu_common_strwidth:
- * @text: The string to operate on
+ * @text: the string to operate on
  *
  * Returns the width of the string in displayed characters on the console.
  *
@@ -1367,9 +1349,9 @@ fu_common_strwidth (const gchar *text)
 
 /**
  * fu_common_string_append_kv:
- * @str: A #GString
- * @idt: The indent
- * @key: A string to append
+ * @str: a #GString
+ * @idt: the indent
+ * @key: a string to append
  * @value: a string to append
  *
  * Appends a key and string value to a string
@@ -1403,22 +1385,21 @@ fu_common_string_append_kv (GString *str, guint idt, const gchar *key, const gch
 				for (gsize j = keysz; j < align; j++)
 					g_string_append (str, " ");
 			} else {
+				g_string_append (str, "\n");
 				for (gsize j = 0; j < idt; j++)
 					g_string_append (str, "  ");
 			}
 			g_string_append (str, split[i]);
-			g_string_append (str, "\n");
 		}
-	} else {
-		g_string_append (str, "\n");
 	}
+	g_string_append (str, "\n");
 }
 
 /**
  * fu_common_string_append_ku:
- * @str: A #GString
- * @idt: The indent
- * @key: A string to append
+ * @str: a #GString
+ * @idt: the indent
+ * @key: a string to append
  * @value: guint64
  *
  * Appends a key and unsigned integer to a string
@@ -1434,9 +1415,9 @@ fu_common_string_append_ku (GString *str, guint idt, const gchar *key, guint64 v
 
 /**
  * fu_common_string_append_kx:
- * @str: A #GString
- * @idt: The indent
- * @key: A string to append
+ * @str: a #GString
+ * @idt: the indent
+ * @key: a string to append
  * @value: guint64
  *
  * Appends a key and hex integer to a string
@@ -1452,9 +1433,9 @@ fu_common_string_append_kx (GString *str, guint idt, const gchar *key, guint64 v
 
 /**
  * fu_common_string_append_kb:
- * @str: A #GString
- * @idt: The indent
- * @key: A string to append
+ * @str: a #GString
+ * @idt: the indent
+ * @key: a string to append
  * @value: Boolean
  *
  * Appends a key and boolean value to a string
@@ -1469,12 +1450,12 @@ fu_common_string_append_kb (GString *str, guint idt, const gchar *key, gboolean 
 
 /**
  * fu_common_dump_full:
- * @log_domain: log domain, typically %G_LOG_DOMAIN or %NULL
- * @title: prefix title, or %NULL
+ * @log_domain: (nullable): optional log domain, typically %G_LOG_DOMAIN
+ * @title: (nullable): optional prefix title
  * @data: buffer to print
  * @len: the size of @data
  * @columns: break new lines after this many bytes
- * @flags: some #FuDumpFlags, e.g. %FU_DUMP_FLAGS_SHOW_ASCII
+ * @flags: dump flags, e.g. %FU_DUMP_FLAGS_SHOW_ASCII
  *
  * Dumps a raw buffer to the screen.
  *
@@ -1537,8 +1518,8 @@ fu_common_dump_full (const gchar *log_domain,
 
 /**
  * fu_common_dump_raw:
- * @log_domain: log domain, typically %G_LOG_DOMAIN or %NULL
- * @title: prefix title, or %NULL
+ * @log_domain: (nullable): optional log domain, typically %G_LOG_DOMAIN
+ * @title: (nullable): optional prefix title
  * @data: buffer to print
  * @len: the size of @data
  *
@@ -1560,9 +1541,9 @@ fu_common_dump_raw (const gchar *log_domain,
 
 /**
  * fu_common_dump_bytes:
- * @log_domain: log domain, typically %G_LOG_DOMAIN or %NULL
- * @title: prefix title, or %NULL
- * @bytes: a #GBytes
+ * @log_domain: (nullable): optional log domain, typically %G_LOG_DOMAIN
+ * @title: (nullable): optional prefix title
+ * @bytes: data blob
  *
  * Dumps a byte buffer to the screen.
  *
@@ -1580,7 +1561,7 @@ fu_common_dump_bytes (const gchar *log_domain,
 
 /**
  * fu_common_bytes_align:
- * @bytes: a #GBytes
+ * @bytes: data blob
  * @blksz: block size in bytes
  * @padval: the byte used to pad the byte buffer
  *
@@ -1618,11 +1599,11 @@ fu_common_bytes_align (GBytes *bytes, gsize blksz, gchar padval)
 
 /**
  * fu_common_bytes_is_empty:
- * @bytes: a #GBytes
+ * @bytes: data blob
  *
  * Checks if a byte array are just empty (0xff) bytes.
  *
- * Return value: %TRUE if @bytes is empty
+ * Returns: %TRUE if @bytes is empty
  *
  * Since: 1.2.6
  **/
@@ -1644,11 +1625,11 @@ fu_common_bytes_is_empty (GBytes *bytes)
  * @bufsz1: sizeof @buf1
  * @buf2: another buffer
  * @bufsz2: sizeof @buf2
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Compares the buffers for equality.
  *
- * Return value: %TRUE if @buf1 and @buf2 are identical
+ * Returns: %TRUE if @buf1 and @buf2 are identical
  *
  * Since: 1.3.2
  **/
@@ -1689,13 +1670,13 @@ fu_common_bytes_compare_raw (const guint8 *buf1, gsize bufsz1,
 
 /**
  * fu_common_bytes_compare:
- * @bytes1: a #GBytes
+ * @bytes1: a data blob
  * @bytes2: another #GBytes
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Compares the buffers for equality.
  *
- * Return value: %TRUE if @bytes1 and @bytes2 are identical
+ * Returns: %TRUE if @bytes1 and @bytes2 are identical
  *
  * Since: 1.2.6
  **/
@@ -1718,12 +1699,12 @@ fu_common_bytes_compare (GBytes *bytes1, GBytes *bytes2, GError **error)
 
 /**
  * fu_common_bytes_pad:
- * @bytes: a #GBytes
+ * @bytes: data blob
  * @sz: the desired size in bytes
  *
  * Pads a GBytes to a minimum @sz with `0xff`.
  *
- * Return value: (transfer full): a #GBytes
+ * Returns: (transfer full): a data blob
  *
  * Since: 1.3.1
  **/
@@ -1751,14 +1732,14 @@ fu_common_bytes_pad (GBytes *bytes, gsize sz)
 
 /**
  * fu_common_bytes_new_offset:
- * @bytes: a #GBytes
+ * @bytes: data blob
  * @offset: where subsection starts at
  * @length: length of subsection
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Creates a #GBytes which is a subsection of another #GBytes.
  *
- * Return value: (transfer full): a #GBytes, or #NULL if range is invalid
+ * Returns: (transfer full): a #GBytes, or #NULL if range is invalid
  *
  * Since: 1.5.4
  **/
@@ -1789,11 +1770,11 @@ fu_common_bytes_new_offset (GBytes *bytes,
 /**
  * fu_common_realpath:
  * @filename: a filename
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Finds the canonicalized absolute filename for a path.
  *
- * Return value: A filename, or %NULL if invalid or not found
+ * Returns: a filename, or %NULL if invalid or not found
  *
  * Since: 1.2.6
  **/
@@ -1835,7 +1816,7 @@ fu_common_realpath (const gchar *filename, GError **error)
  *
  * Matches a string against a glob pattern.
  *
- * Return value: %TRUE if the string matched
+ * Returns: %TRUE if the string matched
  *
  * Since: 1.3.5
  **/
@@ -1844,15 +1825,7 @@ fu_common_fnmatch (const gchar *pattern, const gchar *str)
 {
 	g_return_val_if_fail (pattern != NULL, FALSE);
 	g_return_val_if_fail (str != NULL, FALSE);
-#ifdef HAVE_FNMATCH_H
-	return fnmatch (pattern, str, FNM_NOESCAPE) == 0;
-#elif _WIN32
-	g_return_val_if_fail (strlen (pattern) < MAX_PATH, FALSE);
-	g_return_val_if_fail (strlen (str) < MAX_PATH, FALSE);
-	return PathMatchSpecA (str, pattern);
-#else
-	return g_strcmp0 (pattern, str) == 0;
-#endif
+	return fu_common_fnmatch_impl (pattern, str);
 }
 
 static gint
@@ -1865,12 +1838,12 @@ fu_common_filename_glob_sort_cb (gconstpointer a, gconstpointer b)
  * fu_common_filename_glob:
  * @directory: a directory path
  * @pattern: a glob pattern, e.g. `*foo*`
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Returns all the filenames that match a specific glob pattern.
  * Any results are sorted. No matching files will set @error.
  *
- * Return value:  (element-type utf8) (transfer container): matching files, or %NULL
+ * Returns:  (element-type utf8) (transfer container): matching files, or %NULL
  *
  * Since: 1.5.0
  **/
@@ -1915,7 +1888,7 @@ fu_common_filename_glob (const gchar *directory, const gchar *pattern, GError **
  * delimiter. If @max_tokens is reached, the remainder of string is appended
  * to the last token.
  *
- * Return value: (transfer full): a newly-allocated NULL-terminated array of strings
+ * Returns: (transfer full): a newly-allocated NULL-terminated array of strings
  *
  * Since: 1.3.1
  **/
@@ -1937,7 +1910,7 @@ fu_common_strnsplit (const gchar *str, gsize sz,
  *
  * Converts a string into something that can be safely printed.
  *
- * Return value: (transfer full): safe string, or %NULL if there was nothing valid
+ * Returns: (transfer full): safe string, or %NULL if there was nothing valid
  *
  * Since: 1.5.5
  **/
@@ -1972,8 +1945,8 @@ fu_common_strsafe (const gchar *str, gsize maxsz)
 
 /**
  * fu_common_strjoin_array:
- * @separator: (nullable): string to insert between each of the strings, or %NULL
- * @array: (element-type utf8): A #GPtrArray
+ * @separator: (nullable): string to insert between each of the strings
+ * @array: (element-type utf8): a #GPtrArray
  *
  * Joins an array of strings together to form one long string, with the optional
  * separator inserted between each of them.
@@ -2008,7 +1981,7 @@ fu_common_strjoin_array (const gchar *separator, GPtrArray *array)
  * @src_sz: maximum size of @dst, typically `sizeof(src)`
  * @src_offset: offset in bytes into @src to copy from
  * @n: number of bytes to copy from @src+@offset from
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Copies some memory using memcpy in a safe way. Providing the buffer sizes
  * of both the destination and the source allows us to check for buffer overflow.
@@ -2021,7 +1994,7 @@ fu_common_strjoin_array (const gchar *separator, GPtrArray *array)
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if the bytes were copied, %FALSE otherwise
+ * Returns: %TRUE if the bytes were copied, %FALSE otherwise
  *
  * Since: 1.3.1
  **/
@@ -2079,7 +2052,7 @@ fu_memcpy_safe (guint8 *dst, gsize dst_sz, gsize dst_offset,
  * fu_memdup_safe:
  * @src: source buffer
  * @n: number of bytes to copy from @src
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Duplicates some memory using memdup in a safe way.
  *
@@ -2089,7 +2062,7 @@ fu_memcpy_safe (guint8 *dst, gsize dst_sz, gsize dst_offset,
  *
  * NOTE: This function intentionally limits allocation size to 1GB.
  *
- * Return value: (transfer full): block of allocated memory, or %NULL for an error.
+ * Returns: (transfer full): block of allocated memory, or %NULL for an error.
  *
  * Since: 1.5.6
  **/
@@ -2119,8 +2092,8 @@ fu_memdup_safe (const guint8 *src, gsize n, GError **error)
  * @buf: source buffer
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to copy from
- * @value: (out) (allow-none): the parsed value
- * @error: A #GError or %NULL
+ * @value: (out) (nullable): the parsed value
+ * @error: (nullable): optional return location for an error
  *
  * Read a value from a buffer in a safe way.
  *
@@ -2128,7 +2101,7 @@ fu_memdup_safe (const guint8 *src, gsize n, GError **error)
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was set, %FALSE otherwise
+ * Returns: %TRUE if @value was set, %FALSE otherwise
  *
  * Since: 1.3.3
  **/
@@ -2158,9 +2131,9 @@ fu_common_read_uint8_safe (const guint8 *buf,
  * @buf: source buffer
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to copy from
- * @value: (out) (allow-none): the parsed value
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @value: (out) (nullable): the parsed value
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Read a value from a buffer using a specified endian in a safe way.
  *
@@ -2168,7 +2141,7 @@ fu_common_read_uint8_safe (const guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was set, %FALSE otherwise
+ * Returns: %TRUE if @value was set, %FALSE otherwise
  *
  * Since: 1.3.3
  **/
@@ -2199,9 +2172,9 @@ fu_common_read_uint16_safe (const guint8 *buf,
  * @buf: source buffer
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to copy from
- * @value: (out) (allow-none): the parsed value
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @value: (out) (nullable): the parsed value
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Read a value from a buffer using a specified endian in a safe way.
  *
@@ -2209,7 +2182,7 @@ fu_common_read_uint16_safe (const guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was set, %FALSE otherwise
+ * Returns: %TRUE if @value was set, %FALSE otherwise
  *
  * Since: 1.3.3
  **/
@@ -2240,9 +2213,9 @@ fu_common_read_uint32_safe (const guint8 *buf,
  * @buf: source buffer
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to copy from
- * @value: (out) (allow-none): the parsed value
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @value: (out) (nullable): the parsed value
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Read a value from a buffer using a specified endian in a safe way.
  *
@@ -2250,7 +2223,7 @@ fu_common_read_uint32_safe (const guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was set, %FALSE otherwise
+ * Returns: %TRUE if @value was set, %FALSE otherwise
  *
  * Since: 1.5.8
  **/
@@ -2282,7 +2255,7 @@ fu_common_read_uint64_safe (const guint8 *buf,
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to write to
  * @value: the value to write
- * @error: A #GError or %NULL
+ * @error: (nullable): optional return location for an error
  *
  * Write a value to a buffer in a safe way.
  *
@@ -2290,7 +2263,7 @@ fu_common_read_uint64_safe (const guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was written, %FALSE otherwise
+ * Returns: %TRUE if @value was written, %FALSE otherwise
  *
  * Since: 1.5.8
  **/
@@ -2315,8 +2288,8 @@ fu_common_write_uint8_safe (guint8 *buf,
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to write to
  * @value: the value to write
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Write a value to a buffer using a specified endian in a safe way.
  *
@@ -2324,7 +2297,7 @@ fu_common_write_uint8_safe (guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was written, %FALSE otherwise
+ * Returns: %TRUE if @value was written, %FALSE otherwise
  *
  * Since: 1.5.8
  **/
@@ -2353,8 +2326,8 @@ fu_common_write_uint16_safe (guint8 *buf,
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to write to
  * @value: the value to write
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Write a value to a buffer using a specified endian in a safe way.
  *
@@ -2362,7 +2335,7 @@ fu_common_write_uint16_safe (guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was written, %FALSE otherwise
+ * Returns: %TRUE if @value was written, %FALSE otherwise
  *
  * Since: 1.5.8
  **/
@@ -2391,8 +2364,8 @@ fu_common_write_uint32_safe (guint8 *buf,
  * @bufsz: maximum size of @buf, typically `sizeof(buf)`
  * @offset: offset in bytes into @buf to write to
  * @value: the value to write
- * @endian: A #FuEndianType, e.g. %G_LITTLE_ENDIAN
- * @error: A #GError or %NULL
+ * @endian: an endian type, e.g. %G_LITTLE_ENDIAN
+ * @error: (nullable): optional return location for an error
  *
  * Write a value to a buffer using a specified endian in a safe way.
  *
@@ -2400,7 +2373,7 @@ fu_common_write_uint32_safe (guint8 *buf,
  * you use it when performance is a concern. Only us it when you're not sure if
  * malicious data from a device or firmware could cause memory corruption.
  *
- * Return value: %TRUE if @value was written, %FALSE otherwise
+ * Returns: %TRUE if @value was written, %FALSE otherwise
  *
  * Since: 1.5.8
  **/
@@ -2425,10 +2398,10 @@ fu_common_write_uint64_safe (guint8 *buf,
 
 /**
  * fu_byte_array_append_uint8:
- * @array: A #GByteArray
- * @data:  #guint8
+ * @array: a #GByteArray
+ * @data: value
  *
- * Adds a 8 bit integer to a byte array
+ * Adds a 8 bit integer to a byte array.
  *
  * Since: 1.3.1
  **/
@@ -2440,11 +2413,11 @@ fu_byte_array_append_uint8 (GByteArray *array, guint8 data)
 
 /**
  * fu_byte_array_append_uint16:
- * @array: A #GByteArray
- * @data:  #guint16
- * @endian: #FuEndianType
+ * @array: a #GByteArray
+ * @data: value
+ * @endian: endian type, e.g. #G_LITTLE_ENDIAN
  *
- * Adds a 16 bit integer to a byte array
+ * Adds a 16 bit integer to a byte array.
  *
  * Since: 1.3.1
  **/
@@ -2458,11 +2431,11 @@ fu_byte_array_append_uint16 (GByteArray *array, guint16 data, FuEndianType endia
 
 /**
  * fu_byte_array_append_uint32:
- * @array: A #GByteArray
- * @data:  #guint32
- * @endian: #FuEndianType
+ * @array: a #GByteArray
+ * @data: value
+ * @endian: endian type, e.g. #G_LITTLE_ENDIAN
  *
- * Adds a 32 bit integer to a byte array
+ * Adds a 32 bit integer to a byte array.
  *
  * Since: 1.3.1
  **/
@@ -2476,11 +2449,11 @@ fu_byte_array_append_uint32 (GByteArray *array, guint32 data, FuEndianType endia
 
 /**
  * fu_byte_array_append_uint64:
- * @array: A #GByteArray
- * @data:  #guint64
- * @endian: #FuEndianType
+ * @array: a #GByteArray
+ * @data: value
+ * @endian: endian type, e.g. #G_LITTLE_ENDIAN
  *
- * Adds a 64 bit integer to a byte array
+ * Adds a 64 bit integer to a byte array.
  *
  * Since: 1.5.8
  **/
@@ -2494,10 +2467,10 @@ fu_byte_array_append_uint64 (GByteArray *array, guint64 data, FuEndianType endia
 
 /**
  * fu_byte_array_append_bytes:
- * @array: A #GByteArray
- * @bytes:  A #GBytes
+ * @array: a #GByteArray
+ * @bytes: data blob
  *
- * Adds the contents of a GBytes to a byte array
+ * Adds the contents of a GBytes to a byte array.
  *
  * Since: 1.5.8
  **/
@@ -2531,7 +2504,7 @@ fu_byte_array_set_size_full (GByteArray *array, guint length, guint8 data)
 /**
  * fu_byte_array_set_size:
  * @array: a #GByteArray
- * @length:  the new size of the GByteArray
+ * @length: the new size of the GByteArray
  *
  * Sets the size of the GByteArray, expanding it with NULs if necessary.
  *
@@ -2572,7 +2545,7 @@ fu_byte_array_align_up (GByteArray *array, guint8 alignment, guint8 data)
 gboolean
 fu_common_kernel_locked_down (void)
 {
-#ifndef _WIN32
+#ifdef __linux__
 	gsize len = 0;
 	g_autofree gchar *dir = fu_common_get_path (FU_PATH_KIND_SYSFSDIR_SECURITY);
 	g_autofree gchar *fname = g_build_filename (dir, "lockdown", NULL);
@@ -2598,16 +2571,16 @@ fu_common_kernel_locked_down (void)
 
 /**
  * fu_common_cpuid:
- * @leaf: The CPUID level, now called the 'leaf' by Intel
+ * @leaf: the CPUID level, now called the 'leaf' by Intel
  * @eax: (out) (nullable): EAX register
  * @ebx: (out) (nullable): EBX register
  * @ecx: (out) (nullable): ECX register
  * @edx: (out) (nullable): EDX register
- * @error: A #GError or NULL
+ * @error: (nullable): optional return location for an error
  *
  * Calls CPUID and returns the registers for the given leaf.
  *
- * Return value: %TRUE if the registers are set.
+ * Returns: %TRUE if the registers are set.
  *
  * Since: 1.5.0
  **/
@@ -2652,7 +2625,7 @@ fu_common_cpuid (guint32 leaf,
  *
  * Uses CPUID to discover the CPU vendor.
  *
- * Return value: a #FuCpuVendor, e.g. %FU_CPU_VENDOR_AMD if the vendor was AMD.
+ * Returns: a CPU vendor, e.g. %FU_CPU_VENDOR_AMD if the vendor was AMD.
  *
  * Since: 1.5.5
  **/
@@ -2728,99 +2701,35 @@ fu_common_is_live_media (void)
 guint64
 fu_common_get_memory_size (void)
 {
-#ifdef _WIN32
-	MEMORYSTATUSEX status;
-	status.dwLength = sizeof(status);
-	GlobalMemoryStatusEx (&status);
-	return (guint64) status.ullTotalPhys;
-#else
-	return sysconf (_SC_PHYS_PAGES) * sysconf (_SC_PAGE_SIZE);
-#endif
+	return fu_common_get_memory_size_impl ();
 }
 
-static GPtrArray *
-fu_common_get_block_devices (GError **error)
-{
-	GVariantBuilder builder;
-	const gchar *obj;
-	g_autoptr(GVariant) output = NULL;
-	g_autoptr(GDBusProxy) proxy = NULL;
-	g_autoptr(GPtrArray) devices = NULL;
-	g_autoptr(GVariantIter) iter = NULL;
-	g_autoptr(GDBusConnection) connection = NULL;
-
-	connection = g_bus_get_sync (G_BUS_TYPE_SYSTEM, NULL, error);
-	if (connection == NULL) {
-		g_prefix_error (error, "failed to get system bus: ");
-		return NULL;
-	}
-	proxy = g_dbus_proxy_new_sync (connection,
-				       G_DBUS_PROXY_FLAGS_NONE, NULL,
-				       UDISKS_DBUS_SERVICE,
-				       UDISKS_DBUS_PATH,
-				       UDISKS_DBUS_MANAGER_INTERFACE,
-				       NULL, error);
-	if (proxy == NULL) {
-		g_prefix_error (error, "failed to find %s: ", UDISKS_DBUS_SERVICE);
-		return NULL;
-	}
-	g_variant_builder_init (&builder, G_VARIANT_TYPE_VARDICT);
-	output =  g_dbus_proxy_call_sync (proxy,
-					  "GetBlockDevices",
-					  g_variant_new ("(a{sv})", &builder),
-					  G_DBUS_CALL_FLAGS_NONE,
-					  -1, NULL, error);
-	if (output == NULL) {
-		if (error != NULL)
-			g_dbus_error_strip_remote_error (*error);
-		g_prefix_error (error, "failed to call %s.%s(): ",
-				UDISKS_DBUS_SERVICE,
-				"GetBlockDevices");
-		return NULL;
-	}
-	devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
-	g_variant_get (output, "(ao)", &iter);
-	while (g_variant_iter_next (iter, "&o", &obj)) {
-		g_autoptr(GDBusProxy) proxy_blk = NULL;
-		proxy_blk = g_dbus_proxy_new_sync (connection,
-						   G_DBUS_PROXY_FLAGS_NONE, NULL,
-						   UDISKS_DBUS_SERVICE,
-						   obj,
-						   UDISKS_DBUS_INTERFACE_BLOCK,
-						   NULL, error);
-		if (proxy_blk == NULL) {
-			g_prefix_error (error, "failed to initialize d-bus proxy for %s: ", obj);
-			return NULL;
-		}
-		g_ptr_array_add (devices, g_steal_pointer (&proxy_blk));
-	}
-
-
-	return g_steal_pointer (&devices);
-}
-
-static const gchar *
+const gchar *
 fu_common_convert_to_gpt_type (const gchar *type)
 {
 	struct {
-		const gchar *mbr;
 		const gchar *gpt;
+		const gchar *mbrs[4];
 	} typeguids[] = {
-		{ "0xef",	"c12a7328-f81f-11d2-ba4b-00a0c93ec93b" },	/* esp */
-		{ "0x0b",	"ebd0a0a2-b9e5-4433-87c0-68b6b72699c7" },	/* fat32 */
-		{ NULL, NULL }
+		{ "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",	/* esp */
+			{ "0xef", "efi", NULL }},
+		{ "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",	/* fat32 */
+			{ "0x0b", "fat32", "fat32lba", NULL }},
+		{ NULL, { NULL } }
 	};
-	for (guint i = 0; typeguids[i].mbr != NULL; i++) {
-		if (g_strcmp0 (type, typeguids[i].mbr) == 0)
-			return typeguids[i].gpt;
+	for (guint i = 0; typeguids[i].gpt != NULL; i++) {
+		for (guint j = 0; typeguids[i].mbrs[j] != NULL; j++) {
+			if (g_strcmp0 (type, typeguids[i].mbrs[j]) == 0)
+				return typeguids[i].gpt;
+		}
 	}
 	return type;
 }
 
 /**
  * fu_common_get_volumes_by_kind:
- * @kind: A volume kind, typically a GUID
- * @error: A #GError or NULL
+ * @kind: a volume kind, typically a GUID
+ * @error: (nullable): optional return location for an error
  *
  * Finds all volumes of a specific partition type
  *
@@ -2881,7 +2790,7 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 				    "proxy-filesystem", proxy_fs,
 				    NULL);
 
-		/* convert MBR type to GPT type */
+		/* convert reported type to GPT type */
 		type_str = fu_common_convert_to_gpt_type (type_str);
 		g_debug ("device %s, type: %s, internal: %d, fs: %s",
 			 g_dbus_proxy_get_object_path (proxy_blk), type_str,
@@ -2903,12 +2812,12 @@ fu_common_get_volumes_by_kind (const gchar *kind, GError **error)
 
 /**
  * fu_common_get_volume_by_device:
- * @device: A device string, typcically starting with `/dev/`
- * @error: A #GError or NULL
+ * @device: a device string, typically starting with `/dev/`
+ * @error: (nullable): optional return location for an error
  *
  * Finds the first volume from the specified device.
  *
- * Returns: (transfer full): a #GPtrArray, or %NULL if the kind was not found
+ * Returns: (transfer full): a volume, or %NULL if the device was not found
  *
  * Since: 1.5.1
  **/
@@ -2948,12 +2857,12 @@ fu_common_get_volume_by_device (const gchar *device, GError **error)
 
 /**
  * fu_common_get_volume_by_devnum:
- * @devnum: A device number
- * @error: A #GError or NULL
+ * @devnum: a device number
+ * @error: (nullable): optional return location for an error
  *
  * Finds the first volume from the specified device.
  *
- * Returns: (transfer full): a #GPtrArray, or %NULL if the kind was not found
+ * Returns: (transfer full): a volume, or %NULL if the device was not found
  *
  * Since: 1.5.1
  **/
@@ -2992,11 +2901,11 @@ fu_common_get_volume_by_devnum (guint32 devnum, GError **error)
 
 /**
  * fu_common_get_esp_default:
- * @error: A #GError or NULL
+ * @error: (nullable): optional return location for an error
  *
  * Gets the platform default ESP
  *
- * Returns: (transfer full): a #FuVolume, or %NULL if the ESP was not found
+ * Returns: (transfer full): a volume, or %NULL if the ESP was not found
  *
  * Since: 1.4.6
  **/
@@ -3079,12 +2988,12 @@ fu_common_get_esp_default (GError **error)
 
 /**
  * fu_common_get_esp_for_path:
- * @esp_path: A path to the ESP
- * @error: A #GError or NULL
+ * @esp_path: a path to the ESP
+ * @error: (nullable): optional return location for an error
  *
  * Gets the platform ESP using a UNIX or UDisks path
  *
- * Returns: (transfer full): a #FuVolume, or %NULL if the ESP was not found
+ * Returns: (transfer full): a #volume, or %NULL if the ESP was not found
  *
  * Since: 1.4.6
  **/
@@ -3124,7 +3033,7 @@ fu_common_get_esp_for_path (const gchar *esp_path, GError **error)
 /**
  * fu_common_crc8:
  * @buf: memory buffer
- * @bufsz: sizeof buf
+ * @bufsz: size of @buf
  *
  * Returns the cyclic redundancy check value for the given memory buffer.
  *
@@ -3150,7 +3059,7 @@ fu_common_crc8 (const guint8 *buf, gsize bufsz)
 /**
  * fu_common_crc16:
  * @buf: memory buffer
- * @bufsz: sizeof buf
+ * @bufsz: size of @buf
  *
  * Returns the cyclic redundancy check value for the given memory buffer.
  *
@@ -3178,7 +3087,7 @@ fu_common_crc16 (const guint8 *buf, gsize bufsz)
 /**
  * fu_common_crc32_full:
  * @buf: memory buffer
- * @bufsz: sizeof buf
+ * @bufsz: size of @buf
  * @crc: initial CRC value, typically 0xFFFFFFFF
  * @polynomial: CRC polynomial, typically 0xEDB88320
  *
@@ -3205,7 +3114,7 @@ fu_common_crc32_full (const guint8 *buf, gsize bufsz, guint32 crc, guint32 polyn
 /**
  * fu_common_crc32:
  * @buf: memory buffer
- * @bufsz: sizeof buf
+ * @bufsz: size of @buf
  *
  * Returns the cyclic redundancy check value for the given memory buffer.
  *
@@ -3245,7 +3154,7 @@ fu_common_uri_get_scheme (const gchar *uri)
 /**
  * fu_common_align_up:
  * @value: value to align
- * @alignment: align to this power of 2
+ * @alignment: align to this power of 2, where 0x1F is the maximum value of 2GB
  *
  * Align a value to a power of 2 boundary, where @alignment is the bit position
  * to align to. If @alignment is zero then @value is always returned unchanged.
@@ -3261,6 +3170,8 @@ fu_common_align_up (gsize value, guint8 alignment)
 	gsize value_new;
 	guint32 mask = 1 << alignment;
 
+	g_return_val_if_fail (alignment <= FU_FIRMWARE_ALIGNMENT_2G, G_MAXSIZE);
+
 	/* no alignment required */
 	if ((value & (mask - 1)) == 0)
 		return value;
@@ -3275,4 +3186,118 @@ fu_common_align_up (gsize value, guint8 alignment)
 
 	/* success */
 	return value_new;
+}
+
+/**
+ * fu_battery_state_to_string:
+ * @battery_state: a battery state, e.g. %FU_BATTERY_STATE_FULLY_CHARGED
+ *
+ * Converts an enumerated type to a string.
+ *
+ * Returns: a string, or %NULL for invalid
+ *
+ * Since: 1.6.0
+ **/
+const gchar *
+fu_battery_state_to_string (FuBatteryState battery_state)
+{
+	if (battery_state == FU_BATTERY_STATE_UNKNOWN)
+		return "unknown";
+	if (battery_state == FU_BATTERY_STATE_CHARGING)
+		return "charging";
+	if (battery_state == FU_BATTERY_STATE_DISCHARGING)
+		return "discharging";
+	if (battery_state == FU_BATTERY_STATE_EMPTY)
+		return "empty";
+	if (battery_state == FU_BATTERY_STATE_FULLY_CHARGED)
+		return "fully-charged";
+	return NULL;
+}
+
+/**
+ * fu_bytes_get_data_safe:
+ * @bytes: data blob
+ * @bufsz: (out) (optional): location to return size of byte data
+ * @error: (nullable): optional return location for an error
+ *
+ * Get the byte data in the #GBytes. This data should not be modified.
+ * This function will always return the same pointer for a given #GBytes.
+ *
+ * If the size of @bytes is zero, then %NULL is returned and the @error is set,
+ * which differs in behavior to that of g_bytes_get_data().
+ *
+ * This may be useful when calling g_mapped_file_new() on a zero-length file.
+ *
+ * Returns: a pointer to the byte data, or %NULL.
+ *
+ * Since: 1.6.0
+ **/
+const guint8 *
+fu_bytes_get_data_safe (GBytes *bytes, gsize *bufsz, GError **error)
+{
+	const guint8 *buf = g_bytes_get_data (bytes, bufsz);
+	if (buf == NULL) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_INVALID_DATA,
+			     "invalid data");
+		return NULL;
+	}
+	return buf;
+}
+
+/**
+ * fu_xmlb_builder_insert_kv:
+ * @bn: #XbBuilderNode
+ * @key: string key
+ * @value: string value
+ *
+ * Convenience function to add an XML node with a string value. If @value is %NULL
+ * then no member is added.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_xmlb_builder_insert_kv (XbBuilderNode *bn, const gchar *key, const gchar *value)
+{
+	if (value == NULL)
+		return;
+	xb_builder_node_insert_text (bn, key, value, NULL);
+}
+
+/**
+ * fu_xmlb_builder_insert_kx:
+ * @bn: #XbBuilderNode
+ * @key: string key
+ * @value: integer value
+ *
+ * Convenience function to add an XML node with an integer value. If @value is 0
+ * then no member is added.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_xmlb_builder_insert_kx (XbBuilderNode *bn, const gchar *key, guint64 value)
+{
+	g_autofree gchar *value_hex = NULL;
+	if (value == 0)
+		return;
+	value_hex = g_strdup_printf ("0x%x", (guint) value);
+	xb_builder_node_insert_text (bn, key, value_hex, NULL);
+}
+
+/**
+ * fu_xmlb_builder_insert_kb:
+ * @bn: #XbBuilderNode
+ * @key: string key
+ * @value: boolean value
+ *
+ * Convenience function to add an XML node with a boolean value.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_xmlb_builder_insert_kb (XbBuilderNode *bn, const gchar *key, gboolean value)
+{
+	xb_builder_node_insert_text (bn, key, value ? "true" : "false", NULL);
 }

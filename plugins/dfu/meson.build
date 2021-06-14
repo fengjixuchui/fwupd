@@ -17,11 +17,8 @@ dfu = static_library(
     'fu-dfu-target-avr.c',
   ],
   dependencies : [
-    giounix,
+    plugin_deps,
     libm,
-    libxmlb,
-    gusb,
-    gudev,
   ],
   link_with : [
     fwupd,
@@ -50,6 +47,7 @@ shared_module('fu_plugin_dfu',
   c_args : cargs,
   dependencies : [
     plugin_deps,
+    libm,
   ],
   link_with : [
     fwupd,
@@ -70,11 +68,7 @@ fu_dfu_tool = executable(
     fwupdplugin_incdir,
   ],
   dependencies : [
-    libxmlb,
-    giounix,
-    libm,
-    gusb,
-    gudev,
+    plugin_deps,
   ],
   link_with : [
     dfu,
@@ -87,22 +81,12 @@ fu_dfu_tool = executable(
 )
 
 if get_option('man')
-  help2man = find_program('help2man')
-  extra = join_paths(meson.current_source_dir(), 'fu-dfu-tool.h2m')
-  custom_target('dfu-tool-man',
-    input : fu_dfu_tool,
+  configure_file(
+    input : 'dfu-tool.1',
     output : 'dfu-tool.1',
-    command : [
-      help2man, '@INPUT@',
-      '--no-info',
-      '--output', '@OUTPUT@',
-      '--name', 'dfu-tool',
-      '--manual', 'User Commands',
-      '--version-string', fwupd_version,
-      '--include', extra,
-    ],
-    install : true,
-    install_dir : join_paths(mandir, 'man1'),
+    configuration : conf,
+    install: true,
+    install_dir: join_paths(mandir, 'man1'),
   )
 endif
 
@@ -122,10 +106,7 @@ if get_option('tests')
       fwupdplugin_incdir,
     ],
     dependencies : [
-      libxmlb,
-      gio,
-      gusb,
-      gudev,
+      plugin_deps,
       libm,
     ],
     link_with : [

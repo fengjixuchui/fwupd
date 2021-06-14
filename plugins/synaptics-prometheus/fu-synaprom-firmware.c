@@ -8,9 +8,9 @@
 #include "config.h"
 
 #include <string.h>
+#include <fwupdplugin.h>
 #include <gio/gio.h>
 
-#include "fu-common.h"
 #include "fu-synaprom-firmware.h"
 
 struct _FuSynapromFirmware {
@@ -51,10 +51,12 @@ fu_synaprom_firmware_tag_to_string (guint16 tag)
 }
 
 static void
-fu_synaprom_firmware_to_string (FuFirmware *firmware, guint idt, GString *str)
+fu_synaprom_firmware_export (FuFirmware *firmware,
+			     FuFirmwareExportFlags flags,
+			     XbBuilderNode *bn)
 {
 	FuSynapromFirmware *self = FU_SYNAPROM_FIRMWARE (firmware);
-	fu_common_string_append_kx (str, idt, "ProductId", self->product_id);
+	fu_xmlb_builder_insert_kx (bn, "product_id", self->product_id);
 }
 
 static gboolean
@@ -185,9 +187,7 @@ fu_synaprom_firmware_write (FuFirmware *firmware, GError **error)
 	fu_byte_array_append_uint32 (blob,
 				     g_bytes_get_size (payload),
 				     G_LITTLE_ENDIAN);
-	g_byte_array_append (blob,
-			     g_bytes_get_data (payload, NULL),
-			     g_bytes_get_size (payload));
+	fu_byte_array_append_bytes (blob, payload);
 
 	/* add signature */
 	for (guint i = 0; i < FU_SYNAPROM_FIRMWARE_SIGSIZE; i++)
@@ -222,7 +222,7 @@ fu_synaprom_firmware_class_init (FuSynapromFirmwareClass *klass)
 	FuFirmwareClass *klass_firmware = FU_FIRMWARE_CLASS (klass);
 	klass_firmware->parse = fu_synaprom_firmware_parse;
 	klass_firmware->write = fu_synaprom_firmware_write;
-	klass_firmware->to_string = fu_synaprom_firmware_to_string;
+	klass_firmware->export = fu_synaprom_firmware_export;
 	klass_firmware->build = fu_synaprom_firmware_build;
 }
 

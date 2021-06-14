@@ -15,29 +15,29 @@
 
 #include "config.h"
 
-#include "fu-device.h"
-#include "fwupd-error.h"
-#include "fu-plugin-vfuncs.h"
+#include <fwupdplugin.h>
 
 #include "fu-dell-dock-common.h"
 
 void
 fu_plugin_init (FuPlugin *plugin)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
+
 	fu_plugin_set_build_hash (plugin, FU_BUILD_HASH);
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockBlobBuildOffset");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockBlobMajorOffset");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockBlobMinorOffset");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockBlobVersionOffset");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockBoardMin");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockHubVersionLowest");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockInstallDurationI2C");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockUnlockTarget");
-	fu_plugin_add_possible_quirk_key (plugin, "DellDockVersionLowest");
+	fu_context_add_quirk_key (ctx, "DellDockBlobBuildOffset");
+	fu_context_add_quirk_key (ctx, "DellDockBlobMajorOffset");
+	fu_context_add_quirk_key (ctx, "DellDockBlobMinorOffset");
+	fu_context_add_quirk_key (ctx, "DellDockBlobVersionOffset");
+	fu_context_add_quirk_key (ctx, "DellDockBoardMin");
+	fu_context_add_quirk_key (ctx, "DellDockHubVersionLowest");
+	fu_context_add_quirk_key (ctx, "DellDockInstallDurationI2C");
+	fu_context_add_quirk_key (ctx, "DellDockUnlockTarget");
+	fu_context_add_quirk_key (ctx, "DellDockVersionLowest");
 
 	/* allow these to be built by quirks */
-	g_type_ensure (FU_TYPE_DELL_DOCK_STATUS);
-	g_type_ensure (FU_TYPE_DELL_DOCK_MST);
+	fu_plugin_add_device_gtype (plugin, FU_TYPE_DELL_DOCK_STATUS);
+	fu_plugin_add_device_gtype (plugin, FU_TYPE_DELL_DOCK_MST);
 
 	/* currently slower performance, but more reliable in corner cases */
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_BETTER_THAN, "synaptics_mst");
@@ -48,9 +48,10 @@ fu_plugin_dell_dock_create_node (FuPlugin *plugin,
 				 FuDevice *device,
 				 GError **error)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	g_autoptr(FuDeviceLocker) locker = NULL;
 
-	fu_device_set_quirks (device, fu_plugin_get_quirks (plugin));
+	fu_device_set_context (device, ctx);
 	locker = fu_device_locker_new (device, error);
 	if (locker == NULL)
 		return FALSE;
@@ -65,12 +66,37 @@ fu_plugin_dell_dock_probe (FuPlugin *plugin,
 			   FuDevice *proxy,
 			   GError **error)
 {
+	const gchar* instance;
 	g_autoptr(FuDellDockEc) ec_device = NULL;
+	g_autoptr(FuDellDockMst) mst_device = NULL;
+	g_autoptr(FuDellDockStatus) status_device = NULL;
 
-	/* create all static endpoints */
+	/* create ec endpoint */
 	ec_device = fu_dell_dock_ec_new (proxy);
 	if (!fu_plugin_dell_dock_create_node (plugin,
 					      FU_DEVICE (ec_device),
+					      error))
+		return FALSE;
+
+	/* create mst endpoint */
+	mst_device = fu_dell_dock_mst_new ();
+	fu_device_add_child (FU_DEVICE (ec_device), FU_DEVICE (mst_device));
+	fu_device_add_instance_id (FU_DEVICE (mst_device), "MST-panamera-vmm5331-259");
+	if (!fu_plugin_dell_dock_create_node (plugin,
+					      FU_DEVICE (mst_device),
+					      error))
+		return FALSE;
+
+	/* create package version endpoint */
+	status_device = fu_dell_dock_status_new ();
+	if (fu_dell_dock_module_is_usb4 (FU_DEVICE (ec_device)))
+		instance = "USB\\VID_413C&PID_B06E&hub&salomon_mlk_status";
+	else
+		instance = "USB\\VID_413C&PID_B06E&hub&status";
+	fu_device_add_child (FU_DEVICE (ec_device), FU_DEVICE (status_device));
+	fu_device_add_instance_id (FU_DEVICE (status_device), instance);
+	if (!fu_plugin_dell_dock_create_node (plugin,
+					      FU_DEVICE (status_device),
 					      error))
 		return FALSE;
 

@@ -12,12 +12,11 @@
 #include "fu-usb-device-private.h"
 
 /**
- * SECTION:fu-usb-device
- * @short_description: a USB device
+ * FuUsbDevice:
  *
- * An object that represents a USB device.
+ * A USB device.
  *
- * See also: #FuDevice
+ * See also: [class@FuDevice], [class@FuHidDevice]
  */
 
 typedef struct
@@ -97,7 +96,7 @@ fu_usb_device_init (FuUsbDevice *device)
 
 /**
  * fu_usb_device_is_open:
- * @device: A #FuUsbDevice
+ * @device: a #FuUsbDevice
  *
  * Finds out if a USB device is currently open.
  *
@@ -361,7 +360,7 @@ fu_usb_device_probe (FuDevice *device, GError **error)
 
 /**
  * fu_usb_device_get_vid:
- * @self: A #FuUsbDevice
+ * @self: a #FuUsbDevice
  *
  * Gets the device vendor code.
  *
@@ -385,7 +384,7 @@ fu_usb_device_get_vid (FuUsbDevice *self)
 
 /**
  * fu_usb_device_get_pid:
- * @self: A #FuUsbDevice
+ * @self: a #FuUsbDevice
  *
  * Gets the device product code.
  *
@@ -409,7 +408,7 @@ fu_usb_device_get_pid (FuUsbDevice *self)
 
 /**
  * fu_usb_device_get_platform_id:
- * @self: A #FuUsbDevice
+ * @self: a #FuUsbDevice
  *
  * Gets the device platform ID.
  *
@@ -433,11 +432,11 @@ fu_usb_device_get_platform_id (FuUsbDevice *self)
 
 /**
  * fu_usb_device_get_spec:
- * @self: A #FuUsbDevice
+ * @self: a #FuUsbDevice
  *
  * Gets the string USB revision for the device.
  *
- * Return value: a specification revision in BCD format, or 0x0 if not supported
+ * Returns: a specification revision in BCD format, or 0x0 if not supported
  *
  * Since: 1.3.4
  **/
@@ -457,8 +456,8 @@ fu_usb_device_get_spec (FuUsbDevice *self)
 
 /**
  * fu_usb_device_set_dev:
- * @device: A #FuUsbDevice
- * @usb_device: A #GUsbDevice, or %NULL
+ * @device: a #FuUsbDevice
+ * @usb_device: (nullable): optional #GUsbDevice
  *
  * Sets the #GUsbDevice to use.
  *
@@ -490,8 +489,8 @@ fu_usb_device_set_dev (FuUsbDevice *device, GUsbDevice *usb_device)
 
 /**
  * fu_usb_device_find_udev_device:
- * @device: A #FuUsbDevice
- * @error: A #GError, or %NULL
+ * @device: a #FuUsbDevice
+ * @error: (nullable): optional return location for an error
  *
  * Gets the matching #GUdevDevice for the #GUsbDevice.
  *
@@ -549,11 +548,11 @@ fu_usb_device_find_udev_device (FuUsbDevice *device, GError **error)
 
 /**
  * fu_usb_device_get_dev:
- * @device: A #FuUsbDevice
+ * @device: a #FuUsbDevice
  *
  * Gets the #GUsbDevice.
  *
- * Returns: (transfer none): a #GUsbDevice, or %NULL
+ * Returns: (transfer none): a USB device, or %NULL
  *
  * Since: 1.0.2
  **/
@@ -610,7 +609,7 @@ fu_udev_device_unbind_driver (FuDevice *device, GError **error)
 
 /**
  * fu_usb_device_new:
- * @usb_device: A #GUsbDevice
+ * @usb_device: a USB device
  *
  * Creates a new #FuUsbDevice.
  *

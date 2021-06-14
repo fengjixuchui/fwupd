@@ -8,11 +8,13 @@
 
 #include <string.h>
 #include <xmlb.h>
-#include <fwupd.h>
 #include <fwupdplugin.h>
 #include <libgcab.h>
 #include <glib/gstdio.h>
 
+#include "fu-cabinet.h"
+#include "fu-common-private.h"
+#include "fu-context-private.h"
 #include "fu-device-private.h"
 #include "fu-plugin-private.h"
 #include "fu-security-attrs-private.h"
@@ -117,6 +119,15 @@ fu_archive_cab_func (void)
 	data_tmp = fu_archive_lookup_by_fn (archive, "NOTGOINGTOEXIST.xml", &error);
 	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
 	g_assert_null (data_tmp);
+}
+
+static void
+fu_common_gpt_type_func (void)
+{
+	g_assert_cmpstr (fu_common_convert_to_gpt_type ("0xef"), ==, "c12a7328-f81f-11d2-ba4b-00a0c93ec93b");
+	g_assert_cmpstr (fu_common_convert_to_gpt_type ("0x0b"), ==, "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7");
+	g_assert_cmpstr (fu_common_convert_to_gpt_type ("fat32lba"), ==, "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7");
+	g_assert_cmpstr (fu_common_convert_to_gpt_type ("0x00"), ==, "0x00");
 }
 
 static void
@@ -460,7 +471,7 @@ static void
 fu_plugin_devices_func (void)
 {
 	g_autoptr(FuDevice) device = fu_device_new ();
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuPlugin) plugin = fu_plugin_new (NULL);
 	GPtrArray *devices;
 
 	devices = fu_plugin_get_devices (plugin);
@@ -481,7 +492,7 @@ fu_plugin_delay_func (void)
 	g_autoptr(FuPlugin) plugin = NULL;
 	g_autoptr(FuDevice) device = NULL;
 
-	plugin = fu_plugin_new ();
+	plugin = fu_plugin_new (NULL);
 	g_signal_connect (plugin, "device-added",
 			  G_CALLBACK (_plugin_device_added_cb),
 			  &device_tmp);
@@ -509,29 +520,27 @@ fu_plugin_quirks_func (void)
 {
 	const gchar *tmp;
 	gboolean ret;
-	g_autoptr(FuQuirks) quirks = fu_quirks_new ();
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuContext) ctx = fu_context_new ();
 	g_autoptr(GError) error = NULL;
 
-	ret = fu_quirks_load (quirks, FU_QUIRKS_LOAD_FLAG_NONE, &error);
+	ret = fu_context_load_quirks (ctx, FU_QUIRKS_LOAD_FLAG_NONE, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
-	fu_plugin_set_quirks (plugin, quirks);
 
 	/* exact */
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "USB\\VID_0A5C&PID_6412", "Flags");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "USB\\VID_0A5C&PID_6412", "Flags");
 	g_assert_cmpstr (tmp, ==, "ignore-runtime");
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "ACME Inc.=True", "Name");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "ACME Inc.=True", "Name");
 	g_assert_cmpstr (tmp, ==, "awesome");
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "CORP*", "Name");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "CORP*", "Name");
 	g_assert_cmpstr (tmp, ==, "town");
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "baz", "Unfound");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "baz", "Unfound");
 	g_assert_cmpstr (tmp, ==, NULL);
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "unfound", "tests");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "unfound", "tests");
 	g_assert_cmpstr (tmp, ==, NULL);
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "unfound", "unfound");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "unfound", "unfound");
 	g_assert_cmpstr (tmp, ==, NULL);
-	tmp = fu_plugin_lookup_quirk_by_id (plugin, "bb9ec3e2-77b3-53bc-a1f1-b05916715627", "Flags");
+	tmp = fu_context_lookup_quirk_by_id (ctx, "bb9ec3e2-77b3-53bc-a1f1-b05916715627", "Flags");
 	g_assert_cmpstr (tmp, ==, "clever");
 }
 
@@ -567,16 +576,16 @@ fu_plugin_quirks_device_func (void)
 	GPtrArray *children;
 	gboolean ret;
 	g_autoptr(FuDevice) device = fu_device_new ();
-	g_autoptr(FuQuirks) quirks = fu_quirks_new ();
+	g_autoptr(FuContext) ctx = fu_context_new ();
 	g_autoptr(GError) error = NULL;
 
-	ret = fu_quirks_load (quirks, FU_QUIRKS_LOAD_FLAG_NONE, &error);
+	ret = fu_context_load_quirks (ctx, FU_QUIRKS_LOAD_FLAG_NONE, &error);
 	g_assert_no_error (error);
 	g_assert (ret);
 
 	/* use quirk file to set device attributes */
 	fu_device_set_physical_id (device, "usb:00:05");
-	fu_device_set_quirks (device, quirks);
+	fu_device_set_context (device, ctx);
 	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE);
 	fu_device_add_instance_id (device, "USB\\VID_0BDA&PID_1100");
 	fu_device_convert_instance_ids (device);
@@ -593,21 +602,26 @@ fu_plugin_quirks_device_func (void)
 static void fu_common_kernel_lockdown_func (void)
 {
 	gboolean ret;
-	g_autofree gchar *old_kernel_dir = g_build_filename (TESTDATADIR_SRC,
-							     "lockdown", NULL);
-	g_autofree gchar *locked_dir = g_build_filename (TESTDATADIR_SRC,
-							 "lockdown", "locked", NULL);
-	g_autofree gchar *none_dir = g_build_filename (TESTDATADIR_SRC,
-							"lockedown", "none", NULL);
+	g_autofree gchar *locked_dir = NULL;
+	g_autofree gchar *none_dir = NULL;
+	g_autofree gchar *old_kernel_dir = NULL;
 
+#ifndef __linux__
+	g_test_skip ("only works on Linux");
+	return;
+#endif
+
+	old_kernel_dir = g_build_filename (TESTDATADIR_SRC, "lockdown", NULL);
 	g_setenv ("FWUPD_SYSFSSECURITYDIR", old_kernel_dir, TRUE);
 	ret = fu_common_kernel_locked_down ();
 	g_assert_false (ret);
 
+	locked_dir = g_build_filename (TESTDATADIR_SRC, "lockdown", "locked", NULL);
 	g_setenv ("FWUPD_SYSFSSECURITYDIR", locked_dir, TRUE);
 	ret = fu_common_kernel_locked_down ();
 	g_assert_true (ret);
 
+	none_dir = g_build_filename (TESTDATADIR_SRC, "lockdown", "none", NULL);
 	g_setenv ("FWUPD_SYSFSSECURITYDIR", none_dir, TRUE);
 	ret = fu_common_kernel_locked_down ();
 	g_assert_false (ret);
@@ -690,17 +704,19 @@ fu_device_locker_func (void)
 }
 
 static gboolean
-_fail_open_cb (GObject *device, GError **error)
+_fail_open_cb (FuDevice *device, GError **error)
 {
+	fu_device_set_metadata_boolean (device, "Test::Open", TRUE);
 	g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "fail");
 	return FALSE;
 }
 
 static gboolean
-_fail_close_cb (GObject *device, GError **error)
+_fail_close_cb (FuDevice *device, GError **error)
 {
-	g_assert_not_reached ();
-	return TRUE;
+	fu_device_set_metadata_boolean (device, "Test::Close", TRUE);
+	g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_BUSY, "busy");
+	return FALSE;
 }
 
 static void
@@ -708,10 +724,16 @@ fu_device_locker_fail_func (void)
 {
 	g_autoptr(FuDeviceLocker) locker = NULL;
 	g_autoptr(GError) error = NULL;
-	g_autoptr(GObject) device = g_object_new (G_TYPE_OBJECT, NULL);
-	locker = fu_device_locker_new_full (device, _fail_open_cb, _fail_close_cb, &error);
+	g_autoptr(FuDevice) device = fu_device_new ();
+	locker = fu_device_locker_new_full (device,
+					    (FuDeviceLockerFunc) _fail_open_cb,
+					    (FuDeviceLockerFunc) _fail_close_cb,
+					    &error);
 	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_FAILED);
 	g_assert_null (locker);
+	g_assert_true (fu_device_get_metadata_boolean (device, "Test::Open"));
+	g_assert_true (fu_device_get_metadata_boolean (device, "Test::Close"));
+	g_assert_false (fu_device_has_internal_flag (device, FU_DEVICE_INTERNAL_FLAG_IS_OPEN));
 }
 
 static void
@@ -832,6 +854,33 @@ _build_cab (GCabCompression compression, ...)
 }
 
 static void
+fu_common_cabinet_func (void)
+{
+	g_autoptr(FuCabinet) cabinet = fu_cabinet_new ();
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GBytes) jcat_blob1 = g_bytes_new_static ("hello", 6);
+	g_autoptr(GBytes) jcat_blob2 = g_bytes_new_static ("hellX", 6);
+	g_autoptr(GError) error = NULL;
+
+	/* add */
+	fu_cabinet_add_file (cabinet, "firmware.jcat", jcat_blob1);
+
+	/* replace */
+	fu_cabinet_add_file (cabinet, "firmware.jcat", jcat_blob2);
+
+	/* get data */
+	blob = fu_cabinet_get_file (cabinet, "firmware.jcat", &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (blob);
+	g_assert_cmpstr (g_bytes_get_data (blob, NULL), ==, "hellX");
+
+	/* get data that does not exist */
+	blob = fu_cabinet_get_file (cabinet, "foo.jcat", &error);
+	g_assert_error (error, FWUPD_ERROR, FWUPD_ERROR_INVALID_FILE);
+	g_assert_null (blob);
+}
+
+static void
 fu_common_store_cab_func (void)
 {
 	GBytes *blob_tmp;
@@ -902,6 +951,37 @@ fu_common_store_cab_func (void)
 }
 
 static void
+fu_common_store_cab_artifact_func (void)
+{
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(XbSilo) silo = NULL;
+
+	/* create silo */
+	blob = _build_cab (GCAB_COMPRESSION_NONE,
+			   "acme.metainfo.xml",
+	"<component type=\"firmware\">\n"
+	"  <id>com.acme.example.firmware</id>\n"
+	"  <releases>\n"
+	"    <release version=\"1.2.3\" date=\"2017-09-06\">\n"
+	"      <artifacts>\n"
+	"        <artifact type=\"binary\">\n"
+	"          <filename>firmware.dfu</filename>\n"
+	"          <checksum type=\"sha256\">486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7</checksum>\n"
+	"        </artifact>\n"
+	"      </artifacts>\n"
+	"    </release>\n"
+	"  </releases>\n"
+	"</component>",
+			   "firmware.dfu", "world",
+			   "firmware.dfu.asc", "signature",
+			   NULL);
+	silo = fu_common_cab_build_silo (blob, 10240, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (silo);
+}
+
+static void
 fu_common_store_cab_unsigned_func (void)
 {
 	GBytes *blob_tmp;
@@ -952,6 +1032,31 @@ fu_common_store_cab_unsigned_func (void)
 	g_assert_null (csum);
 	blob_tmp = xb_node_get_data (rel, "fwupd::FirmwareBlob");
 	g_assert_nonnull (blob_tmp);
+}
+
+static void
+fu_common_store_cab_sha256_func (void)
+{
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(XbSilo) silo = NULL;
+
+	/* create silo */
+	blob = _build_cab (GCAB_COMPRESSION_NONE,
+			   "acme.metainfo.xml",
+	"<component type=\"firmware\">\n"
+	"  <id>com.acme.example.firmware</id>\n"
+	"  <releases>\n"
+	"    <release version=\"1.2.3\" date=\"2017-09-06\">\n"
+	"      <checksum target=\"content\" type=\"sha256\">486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7</checksum>\n"
+	"    </release>\n"
+	"  </releases>\n"
+	"</component>",
+			   "firmware.bin", "world",
+			   NULL);
+	silo = fu_common_cab_build_silo (blob, 10240, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (silo);
 }
 
 static void
@@ -1070,6 +1175,44 @@ fu_common_store_cab_error_missing_file_func (void)
 }
 
 static void
+fu_common_bytes_get_data_func (void)
+{
+	const gchar *fn = "/tmp/fwupdzero";
+	const guint8 *buf;
+	gboolean ret;
+	g_autoptr(GBytes) bytes1 = NULL;
+	g_autoptr(GBytes) bytes2 = NULL;
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GMappedFile) mmap = NULL;
+
+	/* create file with zero size */
+	ret = g_file_set_contents (fn, NULL, 0, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+
+	/* check we got zero sized data */
+	bytes1 = fu_common_get_contents_bytes (fn, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (bytes1);
+	g_assert_cmpint (g_bytes_get_size (bytes1), ==, 0);
+	g_assert_nonnull (g_bytes_get_data (bytes1, NULL));
+
+	/* do the same with an mmap mapping, which returns NULL on empty file */
+	mmap = g_mapped_file_new (fn, FALSE, &error);
+	g_assert_no_error (error);
+	g_assert_nonnull (mmap);
+	bytes2 = g_mapped_file_get_bytes (mmap);
+	g_assert_nonnull (bytes2);
+	g_assert_cmpint (g_bytes_get_size (bytes2), ==, 0);
+	g_assert_null (g_bytes_get_data (bytes2, NULL));
+
+	/* use the safe function */
+	buf = fu_bytes_get_data_safe (bytes2, NULL, &error);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA);
+	g_assert_null (buf);
+}
+
+static void
 fu_common_store_cab_error_size_func (void)
 {
 	g_autoptr(XbSilo) silo = NULL;
@@ -1182,6 +1325,69 @@ fu_device_instance_ids_func (void)
 	/* this gets added immediately */
 	fu_device_add_instance_id (device, "bazbarfoo");
 	g_assert_true (fu_device_has_guid (device, "77e49bb0-2cd6-5faf-bcee-5b7fbe6e944d"));
+}
+
+static void
+fu_device_composite_id_func (void)
+{
+	g_autoptr(FuDevice) dev1 = fu_device_new ();
+	g_autoptr(FuDevice) dev2 = fu_device_new ();
+	g_autoptr(FuDevice) dev3 = fu_device_new ();
+	g_autoptr(FuDevice) dev4 = fu_device_new ();
+
+	/* single device */
+	fu_device_set_id (dev1, "dev1");
+	g_assert_cmpstr (fu_device_get_composite_id (dev1), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+	fu_device_set_id (dev2, "dev2");
+
+	/* one child */
+	fu_device_add_child (dev1, dev2);
+	g_assert_cmpstr (fu_device_get_composite_id (dev1), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+	g_assert_cmpstr (fu_device_get_composite_id (dev2), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+
+	/* add a different "family" */
+	fu_device_set_id (dev3, "dev3");
+	fu_device_set_id (dev4, "dev4");
+	fu_device_add_child (dev3, dev4);
+	fu_device_add_child (dev2, dev3);
+	g_assert_cmpstr (fu_device_get_composite_id (dev1), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+	g_assert_cmpstr (fu_device_get_composite_id (dev2), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+	g_assert_cmpstr (fu_device_get_composite_id (dev3), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+	g_assert_cmpstr (fu_device_get_composite_id (dev4), ==, "3b42553c4e3241e8f3f8fbc19a69fa2f95708a9d");
+}
+
+static void
+fu_device_inhibit_func (void)
+{
+	g_autoptr(FuDevice) device = fu_device_new ();
+
+	fu_device_add_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE);
+	fu_device_set_battery_threshold (device, 25);
+	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE));
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN));
+
+	/* does not exist -> fine */
+	fu_device_uninhibit (device, "NOTGOINGTOEXIST");
+
+	/* first one */
+	fu_device_inhibit (device, "needs-activation", "Device is pending activation");
+	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN));
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE));
+
+	/* another */
+	fu_device_set_battery_level (device, 5);
+	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN));
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE));
+
+	/* activated, power still too low */
+	fu_device_uninhibit (device, "needs-activation");
+	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN));
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE));
+
+	/* we got some more power -> fine */
+	fu_device_set_battery_level (device, 95);
+	g_assert_true (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE));
+	g_assert_false (fu_device_has_flag (device, FWUPD_DEVICE_FLAG_UPDATABLE_HIDDEN));
 }
 
 static void
@@ -1307,6 +1513,54 @@ fu_device_incorporate_func (void)
 }
 
 static void
+fu_backend_func (void)
+{
+	FuDevice *dev;
+	gboolean ret;
+	g_autoptr(FuBackend) backend = g_object_new (FU_TYPE_BACKEND, NULL);
+	g_autoptr(FuDevice) dev1 = fu_device_new ();
+	g_autoptr(FuDevice) dev2 = fu_device_new ();
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GPtrArray) devices = NULL;
+
+	/* defaults */
+	g_assert_null (fu_backend_get_name (backend));
+	g_assert_true (fu_backend_get_enabled (backend));
+
+	/* load */
+	ret = fu_backend_setup (backend, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_backend_coldplug (backend, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+
+	/* add two devices, then remove one of them */
+	fu_device_set_physical_id (dev1, "dev1");
+	fu_backend_device_added (backend, dev1);
+	fu_device_set_physical_id (dev2, "dev2");
+	fu_backend_device_added (backend, dev2);
+	fu_backend_device_changed (backend, dev2);
+	fu_backend_device_removed (backend, dev2);
+
+	dev = fu_backend_lookup_by_id (backend, "dev1");
+	g_assert_nonnull (dev);
+	g_assert (dev == dev1);
+
+	/* should have been removed */
+	dev = fu_backend_lookup_by_id (backend, "dev2");
+	g_assert_null (dev);
+
+	/* get linear array */
+	devices = fu_backend_get_devices (backend);
+	g_assert_nonnull (devices);
+	g_assert_cmpint (devices->len, ==, 1);
+	dev = g_ptr_array_index (devices, 0);
+	g_assert_nonnull (dev);
+	g_assert (dev == dev1);
+}
+
+static void
 fu_chunk_func (void)
 {
 	g_autofree gchar *chunked1_str = NULL;
@@ -1320,117 +1574,98 @@ fu_chunk_func (void)
 
 	chunked3 = fu_chunk_array_new ((const guint8 *) "123456", 6, 0x0, 3, 3);
 	chunked3_str = fu_chunk_array_to_string (chunked3);
-	g_assert_cmpstr (chunked3_str, ==, "FuChunk:\n"
-					   "  Index:                0x0\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 123\n"
-					   "  DataSz:               0x3\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x1\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 456\n"
-					   "  DataSz:               0x3\n");
+	g_assert_cmpstr (chunked3_str, ==,
+			 "<chunks>\n"
+			 "  <chunk>\n"
+			 "    <data size=\"0x3\">123</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x1</idx>\n"
+			 "    <page>0x1</page>\n"
+			 "    <data size=\"0x3\">456</data>\n"
+			 "  </chunk>\n"
+			 "</chunks>\n");
 
 	chunked4 = fu_chunk_array_new ((const guint8 *) "123456", 6, 0x4, 4, 4);
 	chunked4_str = fu_chunk_array_to_string (chunked4);
-	g_assert_cmpstr (chunked4_str, ==, "FuChunk:\n"
-					   "  Index:                0x0\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 1234\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x1\n"
-					   "  Page:                 0x2\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 56\n"
-					   "  DataSz:               0x2\n");
+	g_assert_cmpstr (chunked4_str, ==,
+			 "<chunks>\n"
+			 "  <chunk>\n"
+			 "    <page>0x1</page>\n"
+			 "    <data size=\"0x4\">1234</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x1</idx>\n"
+			 "    <page>0x2</page>\n"
+			 "    <data size=\"0x2\">56</data>\n"
+			 "  </chunk>\n"
+			 "</chunks>\n");
 
 	chunked1 = fu_chunk_array_new ((const guint8 *) "0123456789abcdef", 16, 0x0, 10, 4);
 	chunked1_str = fu_chunk_array_to_string (chunked1);
-	g_assert_cmpstr (chunked1_str, ==, "FuChunk:\n"
-					   "  Index:                0x0\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 0123\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x1\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x4\n"
-					   "  Data:                 4567\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x2\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x8\n"
-					   "  Data:                 89\n"
-					   "  DataSz:               0x2\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x3\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 abcd\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x4\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x4\n"
-					   "  Data:                 ef\n"
-					   "  DataSz:               0x2\n");
-
+	g_assert_cmpstr (chunked1_str, ==,
+			 "<chunks>\n"
+			 "  <chunk>\n"
+			 "    <data size=\"0x4\">0123</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x1</idx>\n"
+			 "    <addr>0x4</addr>\n"
+			 "    <data size=\"0x4\">4567</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x2</idx>\n"
+			 "    <addr>0x8</addr>\n"
+			 "    <data size=\"0x2\">89</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x3</idx>\n"
+			 "    <page>0x1</page>\n"
+			 "    <data size=\"0x4\">abcd</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x4</idx>\n"
+			 "    <page>0x1</page>\n"
+			 "    <addr>0x4</addr>\n"
+			 "    <data size=\"0x2\">ef</data>\n"
+			 "  </chunk>\n"
+			 "</chunks>\n");
 	chunked2 = fu_chunk_array_new ((const guint8 *) "XXXXXXYYYYYYZZZZZZ", 18, 0x0, 6, 4);
 	chunked2_str = fu_chunk_array_to_string (chunked2);
 	g_print ("\n%s", chunked2_str);
-	g_assert_cmpstr (chunked2_str, ==, "FuChunk:\n"
-					   "  Index:                0x0\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 XXXX\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x1\n"
-					   "  Page:                 0x0\n"
-					   "  Address:              0x4\n"
-					   "  Data:                 XX\n"
-					   "  DataSz:               0x2\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x2\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 YYYY\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x3\n"
-					   "  Page:                 0x1\n"
-					   "  Address:              0x4\n"
-					   "  Data:                 YY\n"
-					   "  DataSz:               0x2\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x4\n"
-					   "  Page:                 0x2\n"
-					   "  Address:              0x0\n"
-					   "  Data:                 ZZZZ\n"
-					   "  DataSz:               0x4\n"
-					   "\n"
-					   "FuChunk:\n"
-					   "  Index:                0x5\n"
-					   "  Page:                 0x2\n"
-					   "  Address:              0x4\n"
-					   "  Data:                 ZZ\n"
-					   "  DataSz:               0x2\n");
+	g_assert_cmpstr (chunked2_str, ==,
+			 "<chunks>\n"
+			 "  <chunk>\n"
+			 "    <data size=\"0x4\">XXXX</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x1</idx>\n"
+			 "    <addr>0x4</addr>\n"
+			 "    <data size=\"0x2\">XX</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x2</idx>\n"
+			 "    <page>0x1</page>\n"
+			 "    <data size=\"0x4\">YYYY</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x3</idx>\n"
+			 "    <page>0x1</page>\n"
+			 "    <addr>0x4</addr>\n"
+			 "    <data size=\"0x2\">YY</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x4</idx>\n"
+			 "    <page>0x2</page>\n"
+			 "    <data size=\"0x4\">ZZZZ</data>\n"
+			 "  </chunk>\n"
+			 "  <chunk>\n"
+			 "    <idx>0x5</idx>\n"
+			 "    <page>0x2</page>\n"
+			 "    <addr>0x4</addr>\n"
+			 "    <data size=\"0x2\">ZZ</data>\n"
+			 "  </chunk>\n"
+			 "</chunks>\n");
 }
 
 static void
@@ -1976,6 +2211,11 @@ fu_firmware_fmap_func (void)
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) images = NULL;
 
+#ifndef HAVE_MEMMEM
+	g_test_skip ("no memmem()");
+	return;
+#endif
+
 	/* load firmware */
 	filename = g_build_filename (TESTDATADIR_SRC, "firmware.fmap", NULL);
 	g_assert (filename != NULL);
@@ -2134,16 +2374,20 @@ fu_firmware_func (void)
 	g_assert_cmpstr (fu_firmware_get_id (img_idx), ==, "secondary");
 
 	str = fu_firmware_to_string (firmware);
-	g_assert_cmpstr (str, ==, "FuFirmware:\n"
-				  "  FuFirmware:\n"
-				  "  ID:                   primary\n"
-				  "  Index:                0xd\n"
-				  "  Address:              0x200\n"
-				  "  Filename:             BIOS.bin\n"
-				  "  FuFirmware:\n"
-				  "  ID:                   secondary\n"
-				  "  Index:                0x17\n"
-				  "  Address:              0x400\n");
+	g_assert_cmpstr (str, ==,
+			 "<firmware>\n"
+			 "  <firmware>\n"
+			 "    <id>primary</id>\n"
+			 "    <idx>0xd</idx>\n"
+			 "    <addr>0x200</addr>\n"
+			 "    <filename>BIOS.bin</filename>\n"
+			 "  </firmware>\n"
+			 "  <firmware>\n"
+			 "    <id>secondary</id>\n"
+			 "    <idx>0x17</idx>\n"
+			 "    <addr>0x400</addr>\n"
+			 "  </firmware>\n"
+			 "</firmware>\n");
 
 	ret = fu_firmware_remove_image_by_idx (firmware, 0xd, &error);
 	g_assert_no_error (error);
@@ -2214,6 +2458,11 @@ fu_efivar_func (void)
 	g_autofree guint8 *data = NULL;
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) names = NULL;
+
+#ifndef __linux__
+	g_test_skip ("only works on Linux");
+	return;
+#endif
 
 	/* check supported */
 	ret = fu_efivar_supported (&error);
@@ -2464,6 +2713,147 @@ fu_security_attrs_hsi_func (void)
 	g_assert_cmpstr (hsi8, ==, expected_hsi8);
 	g_clear_object (&attr);
 }
+static void
+fu_firmware_dfuse_xml_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *csum1 = NULL;
+	g_autofree gchar *csum2 = NULL;
+	g_autofree gchar *xml_out = NULL;
+	g_autofree gchar *xml_src = NULL;
+	g_autoptr(FuFirmware) firmware1 = fu_dfuse_firmware_new ();
+	g_autoptr(FuFirmware) firmware2 = fu_dfuse_firmware_new ();
+	g_autoptr(GError) error = NULL;
+
+	/* build and write */
+	ret = g_file_get_contents (FWUPD_FUZZINGSRCDIR "/dfuse.builder.xml",
+				   &xml_src, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_build_from_xml (firmware1, xml_src, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum1 = fu_firmware_get_checksum (firmware1, G_CHECKSUM_SHA1, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (csum1, ==, "c1ff429f0e381c8fe8e1b2ee41a5a9a79e2f2ff7");
+
+	/* ensure we can round-trip */
+	xml_out = fu_firmware_export_to_xml (firmware1,
+					     FU_FIRMWARE_EXPORT_FLAG_NONE,
+					     &error);
+
+	g_assert_no_error (error);
+	ret = fu_firmware_build_from_xml (firmware2, xml_out, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum2 = fu_firmware_get_checksum (firmware2, G_CHECKSUM_SHA1, &error);
+	g_assert_cmpstr (csum1, ==, csum2);
+}
+static void
+fu_firmware_srec_xml_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *csum1 = NULL;
+	g_autofree gchar *csum2 = NULL;
+	g_autofree gchar *xml_out = NULL;
+	g_autofree gchar *xml_src = NULL;
+	g_autoptr(FuFirmware) firmware1 = fu_srec_firmware_new ();
+	g_autoptr(FuFirmware) firmware2 = fu_srec_firmware_new ();
+	g_autoptr(GError) error = NULL;
+
+	/* build and write */
+	ret = g_file_get_contents (FWUPD_FUZZINGSRCDIR "/srec.builder.xml",
+				   &xml_src, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_build_from_xml (firmware1, xml_src, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum1 = fu_firmware_get_checksum (firmware1, G_CHECKSUM_SHA1, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (csum1, ==, "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed");
+
+	/* ensure we can round-trip */
+	xml_out = fu_firmware_export_to_xml (firmware1,
+					     FU_FIRMWARE_EXPORT_FLAG_NONE,
+					     &error);
+	g_assert_no_error (error);
+	ret = fu_firmware_build_from_xml (firmware2, xml_out, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum2 = fu_firmware_get_checksum (firmware2, G_CHECKSUM_SHA1, &error);
+	g_assert_cmpstr (csum1, ==, csum2);
+}
+static void
+fu_firmware_ihex_xml_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *csum1 = NULL;
+	g_autofree gchar *csum2 = NULL;
+	g_autofree gchar *xml_out = NULL;
+	g_autofree gchar *xml_src = NULL;
+	g_autoptr(FuFirmware) firmware1 = fu_ihex_firmware_new ();
+	g_autoptr(FuFirmware) firmware2 = fu_ihex_firmware_new ();
+	g_autoptr(GError) error = NULL;
+
+	/* build and write */
+	ret = g_file_get_contents (FWUPD_FUZZINGSRCDIR "/ihex.builder.xml",
+				   &xml_src, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_build_from_xml (firmware1, xml_src, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum1 = fu_firmware_get_checksum (firmware1, G_CHECKSUM_SHA1, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (csum1, ==, "a8d74f767f3fc992b413e5ba801cedc80a4cf013");
+
+	/* ensure we can round-trip */
+	xml_out = fu_firmware_export_to_xml (firmware1,
+					     FU_FIRMWARE_EXPORT_FLAG_NONE,
+					     &error);
+	g_assert_no_error (error);
+	ret = fu_firmware_build_from_xml (firmware2, xml_out, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum2 = fu_firmware_get_checksum (firmware2, G_CHECKSUM_SHA1, &error);
+	g_assert_cmpstr (csum1, ==, csum2);
+}
+static void
+fu_firmware_fmap_xml_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *csum1 = NULL;
+	g_autofree gchar *csum2 = NULL;
+	g_autofree gchar *xml_out = NULL;
+	g_autofree gchar *xml_src = NULL;
+	g_autoptr(FuFirmware) firmware1 = fu_fmap_firmware_new ();
+	g_autoptr(FuFirmware) firmware2 = fu_fmap_firmware_new ();
+	g_autoptr(GError) error = NULL;
+
+	/* build and write */
+	ret = g_file_get_contents (FWUPD_FUZZINGSRCDIR "/fmap.builder.xml",
+				   &xml_src, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_build_from_xml (firmware1, xml_src, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum1 = fu_firmware_get_checksum (firmware1, G_CHECKSUM_SHA1, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (csum1, ==, "a0b9ffc10a586d217edf9e9bae7c1fe7c564ea01");
+
+	/* ensure we can round-trip */
+	xml_out = fu_firmware_export_to_xml (firmware1,
+					     FU_FIRMWARE_EXPORT_FLAG_NONE,
+					     &error);
+	g_assert_no_error (error);
+	ret = fu_firmware_build_from_xml (firmware2, xml_out, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum2 = fu_firmware_get_checksum (firmware2, G_CHECKSUM_SHA1, &error);
+	g_assert_cmpstr (csum1, ==, csum2);
+}
 
 int
 main (int argc, char **argv)
@@ -2486,8 +2876,10 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/plugin{quirks}", fu_plugin_quirks_func);
 	g_test_add_func ("/fwupd/plugin{quirks-performance}", fu_plugin_quirks_performance_func);
 	g_test_add_func ("/fwupd/plugin{quirks-device}", fu_plugin_quirks_device_func);
+	g_test_add_func ("/fwupd/backend", fu_backend_func);
 	g_test_add_func ("/fwupd/chunk", fu_chunk_func);
 	g_test_add_func ("/fwupd/common{align-up}", fu_common_align_up_func);
+	g_test_add_func ("/fwupd/common{gpt-type}", fu_common_gpt_type_func);
 	g_test_add_func ("/fwupd/common{byte-array}", fu_common_byte_array_func);
 	g_test_add_func ("/fwupd/common{crc}", fu_common_crc_func);
 	g_test_add_func ("/fwupd/common{string-append-kv}", fu_common_string_append_kv_func);
@@ -2497,14 +2889,18 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/common{vercmp}", fu_common_vercmp_func);
 	g_test_add_func ("/fwupd/common{strstrip}", fu_common_strstrip_func);
 	g_test_add_func ("/fwupd/common{endian}", fu_common_endian_func);
+	g_test_add_func ("/fwupd/common{cabinet}", fu_common_cabinet_func);
 	g_test_add_func ("/fwupd/common{cab-success}", fu_common_store_cab_func);
+	g_test_add_func ("/fwupd/common{cab-success-artifact}", fu_common_store_cab_artifact_func);
 	g_test_add_func ("/fwupd/common{cab-success-unsigned}", fu_common_store_cab_unsigned_func);
 	g_test_add_func ("/fwupd/common{cab-success-folder}", fu_common_store_cab_folder_func);
+	g_test_add_func ("/fwupd/common{cab-success-sha256}", fu_common_store_cab_sha256_func);
 	g_test_add_func ("/fwupd/common{cab-error-no-metadata}", fu_common_store_cab_error_no_metadata_func);
 	g_test_add_func ("/fwupd/common{cab-error-wrong-size}", fu_common_store_cab_error_wrong_size_func);
 	g_test_add_func ("/fwupd/common{cab-error-wrong-checksum}", fu_common_store_cab_error_wrong_checksum_func);
 	g_test_add_func ("/fwupd/common{cab-error-missing-file}", fu_common_store_cab_error_missing_file_func);
 	g_test_add_func ("/fwupd/common{cab-error-size}", fu_common_store_cab_error_size_func);
+	g_test_add_func ("/fwupd/common{bytes-get-data}", fu_common_bytes_get_data_func);
 	g_test_add_func ("/fwupd/common{spawn)", fu_common_spawn_func);
 	g_test_add_func ("/fwupd/common{spawn-timeout)", fu_common_spawn_timeout_func);
 	g_test_add_func ("/fwupd/common{firmware-builder}", fu_common_firmware_builder_func);
@@ -2520,19 +2916,25 @@ main (int argc, char **argv)
 	g_test_add_func ("/fwupd/firmware{dedupe}", fu_firmware_dedupe_func);
 	g_test_add_func ("/fwupd/firmware{build}", fu_firmware_build_func);
 	g_test_add_func ("/fwupd/firmware{ihex}", fu_firmware_ihex_func);
+	g_test_add_func ("/fwupd/firmware{ihex-xml}", fu_firmware_ihex_xml_func);
 	g_test_add_func ("/fwupd/firmware{ihex-offset}", fu_firmware_ihex_offset_func);
 	g_test_add_func ("/fwupd/firmware{ihex-signed}", fu_firmware_ihex_signed_func);
 	g_test_add_func ("/fwupd/firmware{srec-tokenization}", fu_firmware_srec_tokenization_func);
 	g_test_add_func ("/fwupd/firmware{srec}", fu_firmware_srec_func);
+	g_test_add_func ("/fwupd/firmware{srec-xml}", fu_firmware_srec_xml_func);
 	g_test_add_func ("/fwupd/firmware{dfu}", fu_firmware_dfu_func);
 	g_test_add_func ("/fwupd/firmware{dfuse}", fu_firmware_dfuse_func);
+	g_test_add_func ("/fwupd/firmware{dfuse-xml}", fu_firmware_dfuse_xml_func);
 	g_test_add_func ("/fwupd/firmware{fmap}", fu_firmware_fmap_func);
+	g_test_add_func ("/fwupd/firmware{fmap-xml}", fu_firmware_fmap_xml_func);
 	g_test_add_func ("/fwupd/firmware{gtypes}", fu_firmware_new_from_gtypes_func);
 	g_test_add_func ("/fwupd/archive{invalid}", fu_archive_invalid_func);
 	g_test_add_func ("/fwupd/archive{cab}", fu_archive_cab_func);
 	g_test_add_func ("/fwupd/device", fu_device_func);
 	g_test_add_func ("/fwupd/device{instance-ids}", fu_device_instance_ids_func);
+	g_test_add_func ("/fwupd/device{composite-id}", fu_device_composite_id_func);
 	g_test_add_func ("/fwupd/device{flags}", fu_device_flags_func);
+	g_test_add_func ("/fwupd/device{inhibit}", fu_device_inhibit_func);
 	g_test_add_func ("/fwupd/device{parent}", fu_device_parent_func);
 	g_test_add_func ("/fwupd/device{children}", fu_device_children_func);
 	g_test_add_func ("/fwupd/device{incorporate}", fu_device_incorporate_func);

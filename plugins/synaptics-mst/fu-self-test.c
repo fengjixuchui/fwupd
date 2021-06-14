@@ -10,6 +10,9 @@
 #include <glib/gstdio.h>
 #include <stdlib.h>
 
+#include "fu-synaptics-mst-firmware.h"
+
+#include "fu-context-private.h"
 #include "fu-plugin-private.h"
 
 static void
@@ -24,7 +27,7 @@ _test_add_fake_devices_from_dir (FuPlugin *plugin, const gchar *path)
 {
 	const gchar *basename;
 	gboolean ret;
-	g_autoptr(FuQuirks) quirks = fu_quirks_new ();
+	g_autoptr(FuContext) ctx = fu_context_new ();
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GDir) dir = g_dir_open (path, 0, &error);
 	g_assert_no_error (error);
@@ -35,7 +38,7 @@ _test_add_fake_devices_from_dir (FuPlugin *plugin, const gchar *path)
 		if (!g_str_has_prefix (basename, "drm_dp_aux"))
 			continue;
 		dev = g_object_new (FU_TYPE_UDEV_DEVICE,
-				    "quirks", quirks,
+				    "context", ctx,
 				    "physical-id", "PCI_SLOT_NAME=0000:3e:00.0",
 				    "logical-id", basename,
 				    "subsystem", "drm_dp_aux_dev",
@@ -54,7 +57,8 @@ fu_plugin_synaptics_mst_none_func (void)
 {
 	gboolean ret;
 	const gchar *ci = g_getenv ("CI_NETWORK");
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuContext) ctx = fu_context_new ();
+	g_autoptr(FuPlugin) plugin = fu_plugin_new (ctx);
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	g_autofree gchar *pluginfn = NULL;
@@ -92,7 +96,8 @@ fu_plugin_synaptics_mst_tb16_func (void)
 {
 	gboolean ret;
 	const gchar *ci = g_getenv ("CI_NETWORK");
-	g_autoptr(FuPlugin) plugin = fu_plugin_new ();
+	g_autoptr(FuContext) ctx = fu_context_new ();
+	g_autoptr(FuPlugin) plugin = fu_plugin_new (ctx);
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GPtrArray) devices = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
 	g_autofree gchar *pluginfn = NULL;
@@ -129,6 +134,42 @@ fu_plugin_synaptics_mst_tb16_func (void)
 	g_assert_cmpint (devices->len, ==, 2);
 }
 
+static void
+fu_synaptics_mst_firmware_xml_func (void)
+{
+	gboolean ret;
+	g_autofree gchar *csum1 = NULL;
+	g_autofree gchar *csum2 = NULL;
+	g_autofree gchar *xml_out = NULL;
+	g_autofree gchar *xml_src = NULL;
+	g_autoptr(FuFirmware) firmware1 = fu_synaptics_mst_firmware_new ();
+	g_autoptr(FuFirmware) firmware2 = fu_synaptics_mst_firmware_new ();
+	g_autoptr(GError) error = NULL;
+
+	/* build and write */
+	ret = g_file_get_contents (FWUPD_FUZZINGSRCDIR "/synaptics-mst.builder.xml",
+				   &xml_src, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	ret = fu_firmware_build_from_xml (firmware1, xml_src, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum1 = fu_firmware_get_checksum (firmware1, G_CHECKSUM_SHA1, &error);
+	g_assert_no_error (error);
+	g_assert_cmpstr (csum1, ==, "bfcdf3e6ca6cef45543bfbb57509c92aec9a39fb");
+
+	/* ensure we can round-trip */
+	xml_out = fu_firmware_export_to_xml (firmware1,
+					     FU_FIRMWARE_EXPORT_FLAG_NONE,
+					     &error);
+	g_assert_no_error (error);
+	ret = fu_firmware_build_from_xml (firmware2, xml_out, &error);
+	g_assert_no_error (error);
+	g_assert_true (ret);
+	csum2 = fu_firmware_get_checksum (firmware2, G_CHECKSUM_SHA1, &error);
+	g_assert_cmpstr (csum1, ==, csum2);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -142,5 +183,7 @@ main (int argc, char **argv)
 	/* tests go here */
 	g_test_add_func ("/fwupd/plugin/synaptics_mst{none}", fu_plugin_synaptics_mst_none_func);
 	g_test_add_func ("/fwupd/plugin/synaptics_mst{tb16}", fu_plugin_synaptics_mst_tb16_func);
+	g_test_add_func ("/fwupd/plugin/synaptics_mst/firmware{xml}", fu_synaptics_mst_firmware_xml_func);
+
 	return g_test_run ();
 }

@@ -14,8 +14,17 @@
 #include "fu-cabinet.h"
 #include "fu-common.h"
 
+#include "fwupd-common.h"
 #include "fwupd-enums.h"
 #include "fwupd-error.h"
+
+/**
+ * FuCabinet:
+ *
+ * Cabinet archive parser and writer.
+ *
+ * See also: [class@FuArchive]
+ */
 
 struct _FuCabinet {
 	GObject			 parent_instance;
@@ -64,7 +73,7 @@ fu_cabinet_init (FuCabinet *self)
 
 /**
  * fu_cabinet_set_size_max:
- * @self: A #FuCabinet
+ * @self: a #FuCabinet
  * @size_max: size in bytes
  *
  * Sets the maximum size of the decompressed cabinet file.
@@ -80,8 +89,8 @@ fu_cabinet_set_size_max (FuCabinet *self, guint64 size_max)
 
 /**
  * fu_cabinet_set_jcat_context: (skip):
- * @self: A #FuCabinet
- * @jcat_context: (nullable): A #JcatContext
+ * @self: a #FuCabinet
+ * @jcat_context: (nullable): a Jcat context
  *
  * Sets the Jcat context, which is used for setting the trust flags on the
  * each release in the archive.
@@ -98,9 +107,9 @@ fu_cabinet_set_jcat_context (FuCabinet *self, JcatContext *jcat_context)
 
 /**
  * fu_cabinet_get_silo: (skip):
- * @self: A #FuCabinet
+ * @self: a #FuCabinet
  *
- * Gets the silo that represents the supset metadata of all the metainfo files
+ * Gets the silo that represents the superset metadata of all the metainfo files
  * found in the archive.
  *
  * Returns: (transfer full): a #XbSilo, or %NULL if the archive has not been parsed
@@ -129,6 +138,88 @@ fu_cabinet_get_file_by_name (FuCabinet *self, const gchar *basename)
 	return NULL;
 }
 
+/**
+ * fu_cabinet_add_file:
+ * @self: a #FuCabinet
+ * @basename: filename
+ * @data: file data
+ *
+ * Adds a file to the silo.
+ *
+ * Since: 1.6.0
+ **/
+void
+fu_cabinet_add_file (FuCabinet *self, const gchar *basename, GBytes *data)
+{
+	GPtrArray *folders;
+	GCabFile *gcab_file_old;
+	g_autoptr(GCabFolder) gcab_folder = NULL;
+	g_autoptr(GCabFile) gcab_file = NULL;
+
+	g_return_if_fail (FU_IS_CABINET (self));
+	g_return_if_fail (basename != NULL);
+	g_return_if_fail (data != NULL);
+
+	/* existing file? */
+	gcab_file_old = fu_cabinet_get_file_by_name (self, basename);
+	if (gcab_file_old != NULL) {
+		g_object_set (gcab_file_old, "bytes", data, NULL);
+		return;
+	}
+
+	/* new file, in a possibly new folder */
+	folders = gcab_cabinet_get_folders (self->gcab_cabinet);
+	if (folders->len == 0) {
+		gcab_folder = gcab_folder_new (GCAB_COMPRESSION_NONE);
+		gcab_cabinet_add_folder (self->gcab_cabinet, gcab_folder, NULL);
+	} else {
+		gcab_folder = g_object_ref (GCAB_FOLDER (g_ptr_array_index (folders, 0)));
+	}
+	gcab_file = gcab_file_new_with_bytes (basename, data);
+	gcab_folder_add_file (gcab_folder, gcab_file, FALSE, NULL, NULL);
+}
+
+/**
+ * fu_cabinet_get_file:
+ * @self: a #FuCabinet
+ * @basename: filename
+ * @error: (nullable): optional return location for an error
+ *
+ * Gets a file from the archive.
+ *
+ * Returns: (transfer full): a #GBytes, or %NULL if the file does not exist
+ *
+ * Since: 1.6.0
+ **/
+GBytes *
+fu_cabinet_get_file (FuCabinet *self, const gchar *basename, GError **error)
+{
+	GCabFile *cabfile;
+	GBytes *blob;
+
+	g_return_val_if_fail (FU_IS_CABINET (self), NULL);
+	g_return_val_if_fail (basename != NULL, NULL);
+
+	cabfile = fu_cabinet_get_file_by_name (self, basename);
+	if (cabfile == NULL) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_INVALID_FILE,
+			     "cannot find %s in archive",
+			     basename);
+		return NULL;
+	}
+	blob = gcab_file_get_bytes (cabfile);
+	if (blob == NULL) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_FILE,
+				     "no GBytes from GCabFile firmware");
+		return NULL;
+	}
+	return g_bytes_ref (blob);
+}
+
 /* sets the firmware and signature blobs on XbNode */
 static gboolean
 fu_cabinet_parse_release (FuCabinet *self, XbNode *release, GError **error)
@@ -137,6 +228,7 @@ fu_cabinet_parse_release (FuCabinet *self, XbNode *release, GError **error)
 	GBytes *blob;
 	const gchar *csum_filename = NULL;
 	g_autofree gchar *basename = NULL;
+	g_autoptr(XbNode) artifact = NULL;
 	g_autoptr(XbNode) csum_tmp = NULL;
 	g_autoptr(XbNode) metadata_trust = NULL;
 	g_autoptr(XbNode) nsize = NULL;
@@ -149,10 +241,18 @@ fu_cabinet_parse_release (FuCabinet *self, XbNode *release, GError **error)
 	if (metadata_trust != NULL)
 		release_flags |= FWUPD_RELEASE_FLAG_TRUSTED_METADATA;
 
-	/* ensure we always have a content checksum */
-	csum_tmp = xb_node_query_first (release, "checksum[@target='content']", NULL);
-	if (csum_tmp != NULL)
-		csum_filename = xb_node_get_attr (csum_tmp, "filename");
+	/* look for source artifact first */
+	artifact = xb_node_query_first (release, "artifacts/artifact[@type='binary']", NULL);
+	if (artifact != NULL) {
+		csum_filename = xb_node_query_text (artifact, "filename", NULL);
+		csum_tmp = xb_node_query_first (artifact, "checksum[@type='sha256']", NULL);
+		if (csum_tmp == NULL)
+			csum_tmp = xb_node_query_first (artifact, "checksum", NULL);
+	} else {
+		csum_tmp = xb_node_query_first (release, "checksum[@target='content']", NULL);
+		if (csum_tmp != NULL)
+			csum_filename = xb_node_get_attr (csum_tmp, "filename");
+	}
 
 	/* if this isn't true, a firmware needs to set in the metainfo.xml file
 	 * something like: <checksum target="content" filename="FLASH.ROM"/> */
@@ -203,9 +303,11 @@ fu_cabinet_parse_release (FuCabinet *self, XbNode *release, GError **error)
 
 	/* set if unspecified, but error out if specified and incorrect */
 	if (csum_tmp != NULL && xb_node_get_text (csum_tmp) != NULL) {
+		const gchar *checksum_old = xb_node_get_text (csum_tmp);
+		GChecksumType checksum_type = fwupd_checksum_guess_kind (checksum_old);
 		g_autofree gchar *checksum = NULL;
-		checksum = g_compute_checksum_for_bytes (G_CHECKSUM_SHA1, blob);
-		if (g_strcmp0 (checksum, xb_node_get_text (csum_tmp)) != 0) {
+		checksum = g_compute_checksum_for_bytes (checksum_type, blob);
+		if (g_strcmp0 (checksum, checksum_old) != 0) {
 			g_set_error (error,
 				     FWUPD_ERROR,
 				     FWUPD_ERROR_INVALID_FILE,
@@ -366,6 +468,9 @@ fu_cabinet_build_silo_file (FuCabinet *self,
 	/* indicate the metainfo file was signed */
 	if (release_flags & FWUPD_RELEASE_FLAG_TRUSTED_METADATA)
 		xb_builder_node_insert (bn_info, "metadata_trust", NULL);
+	xb_builder_node_insert_text (bn_info, "filename",
+				     gcab_file_get_name (cabfile),
+				     NULL);
 	xb_builder_source_set_info (source, bn_info);
 
 	/* rewrite to be under a components root */
@@ -637,11 +742,218 @@ fu_cabinet_decompress (FuCabinet *self, GBytes *data, GError **error)
 }
 
 /**
+ * fu_cabinet_export:
+ * @self: a #FuCabinet
+ * @flags: export flags, e.g. %FU_CABINET_EXPORT_FLAG_NONE
+ * @error: (nullable): optional return location for an error
+ *
+ * Exports the cabinet archive.
+ *
+ * Returns: (transfer full): a data blob
+ *
+ * Since: 1.6.0
+ **/
+GBytes *
+fu_cabinet_export (FuCabinet *self,
+		   FuCabinetExportFlags flags,
+		   GError **error)
+{
+	g_autoptr(GOutputStream) op = NULL;
+	op = g_memory_output_stream_new_resizable ();
+	if (!gcab_cabinet_write_simple  (self->gcab_cabinet, op,
+					 NULL, NULL, /* progress */
+					 NULL, error))
+		return NULL;
+	if (!g_output_stream_close (op, NULL, error))
+		return NULL;
+	return g_memory_output_stream_steal_as_bytes (G_MEMORY_OUTPUT_STREAM (op));
+}
+
+static gboolean
+fu_cabinet_sign_filename (FuCabinet *self,
+			  const gchar *filename,
+			  JcatEngine *jcat_engine,
+			  JcatFile *jcat_file,
+			  GBytes *cert,
+			  GBytes *privkey,
+			  GError **error)
+{
+	g_autoptr(GBytes) source_blob = NULL;
+	g_autoptr(JcatBlob) jcat_blob = NULL;
+	g_autoptr(JcatItem) jcat_item = NULL;
+
+	/* sign the file using the engine */
+	source_blob = fu_cabinet_get_file (self, filename, error);
+	if (source_blob == NULL)
+		return FALSE;
+	jcat_item = jcat_file_get_item_by_id (jcat_file, filename, NULL);
+	if (jcat_item == NULL) {
+		jcat_item = jcat_item_new (filename);
+		jcat_file_add_item (jcat_file, jcat_item);
+	}
+	jcat_blob = jcat_engine_pubkey_sign (jcat_engine, source_blob, cert, privkey,
+					     JCAT_SIGN_FLAG_ADD_TIMESTAMP |
+					     JCAT_SIGN_FLAG_ADD_CERT,
+					     error);
+	if (jcat_blob == NULL)
+		return FALSE;
+	jcat_item_add_blob (jcat_item, jcat_blob);
+	return TRUE;
+}
+
+static gboolean
+fu_cabinet_sign_enumerate_metainfo (FuCabinet *self, GPtrArray *files, GError **error)
+{
+	g_autoptr(GError) error_local = NULL;
+	g_autoptr(GPtrArray) nodes = NULL;
+	g_autoptr(XbSilo) silo = fu_cabinet_get_silo (self);
+
+	/* get all the firmware referenced by the metainfo files */
+	nodes = xb_silo_query (silo,
+			       "components/component[@type='firmware']/info/filename",
+			       0, &error_local);
+	if (nodes == NULL) {
+		if (g_error_matches (error_local,
+				     G_IO_ERROR,
+				     G_IO_ERROR_INVALID_ARGUMENT) ||
+		    g_error_matches (error_local,
+				     G_IO_ERROR,
+				     G_IO_ERROR_NOT_FOUND)) {
+			g_debug ("ignoring: %s", error_local->message);
+			g_ptr_array_add (files, g_strdup ("firmware.metainfo.xml"));
+		} else {
+			g_propagate_error (error, g_steal_pointer (&error_local));
+			return FALSE;
+		}
+	} else {
+		for (guint i = 0; i < nodes->len; i++) {
+			XbNode *n = g_ptr_array_index (nodes, i);
+			g_debug ("adding: %s", xb_node_get_text (n));
+			g_ptr_array_add (files, g_strdup (xb_node_get_text (n)));
+		}
+	}
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_cabinet_sign_enumerate_firmware (FuCabinet *self, GPtrArray *files, GError **error)
+{
+	g_autoptr(GError) error_local = NULL;
+	g_autoptr(GPtrArray) nodes = NULL;
+	g_autoptr(XbSilo) silo = fu_cabinet_get_silo (self);
+
+	nodes = xb_silo_query (silo,
+			       "components/component[@type='firmware']/releases/"
+			       "release/checksum[@target='content']",
+			       0, &error_local);
+	if (nodes == NULL) {
+		if (g_error_matches (error_local,
+				     G_IO_ERROR,
+				     G_IO_ERROR_INVALID_ARGUMENT) ||
+		    g_error_matches (error_local,
+				     G_IO_ERROR,
+				     G_IO_ERROR_NOT_FOUND)) {
+			g_debug ("ignoring: %s", error_local->message);
+			g_ptr_array_add (files, g_strdup ("firmware.bin"));
+		} else {
+			g_propagate_error (error, g_steal_pointer (&error_local));
+			return FALSE;
+		}
+	} else {
+		for (guint i = 0; i < nodes->len; i++) {
+			XbNode *n = g_ptr_array_index (nodes, i);
+			g_debug ("adding: %s", xb_node_get_attr (n, "filename"));
+			g_ptr_array_add (files, g_strdup (xb_node_get_attr (n, "filename")));
+		}
+	}
+	g_error ("%s", xb_silo_export(silo, XB_NODE_EXPORT_FLAG_FORMAT_MULTILINE | XB_NODE_EXPORT_FLAG_FORMAT_INDENT, NULL));
+
+	/* success */
+	return TRUE;
+}
+
+/**
+ * fu_cabinet_sign:
+ * @self: a #FuCabinet
+ * @cert: a PCKS#7 certificate
+ * @privkey: a private key
+ * @flags: signing flags, e.g. %FU_CABINET_SIGN_FLAG_NONE
+ * @error: (nullable): optional return location for an error
+ *
+ * Sign the cabinet archive using JCat.
+ *
+ * Returns: %TRUE for success
+ *
+ * Since: 1.6.0
+ **/
+gboolean
+fu_cabinet_sign (FuCabinet *self,
+		 GBytes *cert,
+		 GBytes *privkey,
+		 FuCabinetSignFlags flags,
+		 GError **error)
+{
+	g_autoptr(GBytes) new_bytes = NULL;
+	g_autoptr(GBytes) old_bytes = NULL;
+	g_autoptr(GOutputStream) ostr = NULL;
+	g_autoptr(GPtrArray) filenames = g_ptr_array_new_with_free_func (g_free);
+	g_autoptr(JcatContext) jcat_context = jcat_context_new ();
+	g_autoptr(JcatEngine) jcat_engine = NULL;
+	g_autoptr(JcatFile) jcat_file = jcat_file_new ();
+
+	/* load existing .jcat file if it exists */
+	old_bytes = fu_cabinet_get_file (self, "firmware.jcat", NULL);
+	if (old_bytes != NULL) {
+		g_autoptr(GInputStream) istr = NULL;
+		istr = g_memory_input_stream_new_from_bytes (old_bytes);
+		if (!jcat_file_import_stream (jcat_file, istr,
+					      JCAT_IMPORT_FLAG_NONE,
+					      NULL, error))
+			return FALSE;
+	}
+
+	/* get all the metainfo.xml and firmware.bin files */
+	if (!fu_cabinet_sign_enumerate_metainfo (self, filenames, error))
+		return FALSE;
+	if (!fu_cabinet_sign_enumerate_firmware (self, filenames, error))
+		return FALSE;
+
+	/* sign all the files */
+	jcat_engine = jcat_context_get_engine (jcat_context,
+					       JCAT_BLOB_KIND_PKCS7,
+					       error);
+	if (jcat_engine == NULL)
+		return FALSE;
+	for (guint i = 0; i < filenames->len; i++) {
+		const gchar *filename = g_ptr_array_index (filenames, i);
+		if (!fu_cabinet_sign_filename (self,
+					       filename,
+					       jcat_engine,
+					       jcat_file,
+					       cert, privkey,
+					       error))
+			return FALSE;
+	}
+
+	/* export new JCat file and add it to the archive */
+	ostr = g_memory_output_stream_new_resizable ();
+	if (!jcat_file_export_stream (jcat_file, ostr,
+				      JCAT_EXPORT_FLAG_NONE,
+				      NULL, error))
+		return FALSE;
+	new_bytes = g_memory_output_stream_steal_as_bytes (G_MEMORY_OUTPUT_STREAM (ostr));
+	fu_cabinet_add_file (self, "firmware.jcat", new_bytes);
+	return TRUE;
+}
+
+/**
  * fu_cabinet_parse:
- * @self: A #FuCabinet
- * @data: A #GBytes
- * @flags: A #FuCabinetParseFlags, e.g. %FU_CABINET_PARSE_FLAG_NONE
- * @error: A #GError, or %NULL
+ * @self: a #FuCabinet
+ * @data: cabinet archive
+ * @flags: parse flags, e.g. %FU_CABINET_PARSE_FLAG_NONE
+ * @error: (nullable): optional return location for an error
  *
  * Parses the cabinet archive.
  *

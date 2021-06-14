@@ -22,39 +22,28 @@
 
 #include "config.h"
 
+#include <fwupdplugin.h>
 #include <string.h>
 
-#include "fu-plugin-vfuncs.h"
-#include "fu-flashrom-device.h"
+#include "fu-flashrom-internal-device.h"
+#include "fu-flashrom-lspcon-i2c-spi-device.h"
 
 #include <libflashrom.h>
 
 #define SELFCHECK_TRUE 1
 
-struct FuPluginData {
-	gsize				 flash_size;
-	struct flashrom_flashctx	*flashctx;
-	struct flashrom_layout		*layout;
-	struct flashrom_programmer	*flashprog;
-};
-
 void
 fu_plugin_init (FuPlugin *plugin)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
+
 	fu_plugin_set_build_hash (plugin, FU_BUILD_HASH);
-	fu_plugin_alloc_data (plugin, sizeof (FuPluginData));
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_METADATA_SOURCE, "linux_lockdown");
 	fu_plugin_add_rule (plugin, FU_PLUGIN_RULE_CONFLICTS, "coreboot"); /* obsoleted */
 	fu_plugin_add_flag (plugin, FWUPD_PLUGIN_FLAG_REQUIRE_HWID);
-}
-
-void
-fu_plugin_destroy (FuPlugin *plugin)
-{
-	FuPluginData *data = fu_plugin_get_data (plugin);
-	flashrom_layout_release (data->layout);
-	flashrom_programmer_shutdown (data->flashprog);
-	flashrom_flash_release (data->flashctx);
+	fu_plugin_add_device_gtype (plugin, FU_TYPE_FLASHROM_LSPCON_I2C_SPI_DEVICE);
+	fu_context_add_udev_subsystem (ctx, "i2c");
+	fu_context_add_quirk_key (ctx, "FlashromProgrammer");
 }
 
 static int
@@ -91,12 +80,13 @@ fu_plugin_flashrom_debug_cb (enum flashrom_log_level lvl, const char *fmt, va_li
 static void
 fu_plugin_flashrom_device_set_version (FuPlugin *plugin, FuDevice *device)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	const gchar *version;
 	const gchar *version_major;
 	const gchar *version_minor;
 
 	/* as-is */
-	version = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_VERSION);
+	version = fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_BIOS_VERSION);
 	if (version != NULL) {
 		/* some Lenovo hardware requires a specific prefix for the EC,
 		 * so strip it before we use ensure-semver */
@@ -110,8 +100,8 @@ fu_plugin_flashrom_device_set_version (FuPlugin *plugin, FuDevice *device)
 	}
 
 	/* component parts only */
-	version_major = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_MAJOR_RELEASE);
-	version_minor = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_MINOR_RELEASE);
+	version_major = fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_BIOS_MAJOR_RELEASE);
+	version_minor = fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_BIOS_MINOR_RELEASE);
 	if (version_major != NULL && version_minor != NULL) {
 		g_autofree gchar *tmp = g_strdup_printf ("%s.%s.0",
 							 version_major,
@@ -123,6 +113,7 @@ fu_plugin_flashrom_device_set_version (FuPlugin *plugin, FuDevice *device)
 static void
 fu_plugin_flashrom_device_set_bios_info (FuPlugin *plugin, FuDevice *device)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	const guint8 *buf;
 	gsize bufsz;
 	guint32 bios_char = 0x0;
@@ -130,7 +121,7 @@ fu_plugin_flashrom_device_set_bios_info (FuPlugin *plugin, FuDevice *device)
 	g_autoptr(GBytes) bios_table = NULL;
 
 	/* get SMBIOS info */
-	bios_table = fu_plugin_get_smbios_data (plugin, FU_SMBIOS_STRUCTURE_TYPE_BIOS);
+	bios_table = fu_context_get_smbios_data (ctx, FU_SMBIOS_STRUCTURE_TYPE_BIOS);
 	if (bios_table == NULL)
 		return;
 
@@ -151,6 +142,7 @@ fu_plugin_flashrom_device_set_bios_info (FuPlugin *plugin, FuDevice *device)
 static void
 fu_plugin_flashrom_device_set_hwids (FuPlugin *plugin, FuDevice *device)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	static const gchar *hwids[] = {
 		"HardwareID-3",
 		"HardwareID-4",
@@ -167,7 +159,7 @@ fu_plugin_flashrom_device_set_hwids (FuPlugin *plugin, FuDevice *device)
 	/* don't include FU_HWIDS_KEY_BIOS_VERSION */
 	for (guint i = 0; i < G_N_ELEMENTS (hwids); i++) {
 		g_autofree gchar *str = NULL;
-		str = fu_plugin_get_hwid_replace_value (plugin, hwids[i], NULL);
+		str = fu_context_get_hwid_replace_value (ctx, hwids[i], NULL);
 		if (str != NULL)
 			fu_device_add_instance_id (device, str);
 	}
@@ -176,17 +168,16 @@ fu_plugin_flashrom_device_set_hwids (FuPlugin *plugin, FuDevice *device)
 gboolean
 fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 {
-	FuPluginData *data = fu_plugin_get_data (plugin);
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	const gchar *dmi_vendor;
-	gint rc;
-	g_autoptr(FuDevice) device = fu_flashrom_device_new ();
+	g_autoptr(FuDevice) device = fu_flashrom_internal_device_new ();
 
-	fu_device_set_quirks (device, fu_plugin_get_quirks (plugin));
-	fu_device_set_name (device, fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_PRODUCT_NAME));
-	fu_device_set_vendor (device, fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_MANUFACTURER));
+	fu_device_set_context (device, ctx);
+	fu_device_set_name (device, fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_PRODUCT_NAME));
+	fu_device_set_vendor (device, fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_MANUFACTURER));
 
 	/* use same VendorID logic as with UEFI */
-	dmi_vendor = fu_plugin_get_dmi_value (plugin, FU_HWIDS_KEY_BIOS_VENDOR);
+	dmi_vendor = fu_context_get_hwid_value (ctx, FU_HWIDS_KEY_BIOS_VENDOR);
 	if (dmi_vendor != NULL) {
 		g_autofree gchar *vendor_id = g_strdup_printf ("DMI:%s", dmi_vendor);
 		fu_device_add_vendor_id (FU_DEVICE (device), vendor_id);
@@ -194,10 +185,18 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 	fu_plugin_flashrom_device_set_version (plugin, device);
 	fu_plugin_flashrom_device_set_hwids (plugin, device);
 	fu_plugin_flashrom_device_set_bios_info (plugin, device);
+	fu_flashrom_device_set_programmer_name (FU_FLASHROM_DEVICE (device), "internal");
 	if (!fu_device_setup (device, error))
 		return FALSE;
 
-	/* actually probe hardware to check for support */
+	/* success */
+	fu_plugin_device_add (plugin, device);
+	return TRUE;
+}
+
+gboolean
+fu_plugin_startup (FuPlugin *plugin, GError **error)
+{
 	if (flashrom_init (SELFCHECK_TRUE)) {
 		g_set_error_literal (error,
 				     FWUPD_ERROR,
@@ -206,150 +205,5 @@ fu_plugin_coldplug (FuPlugin *plugin, GError **error)
 		return FALSE;
 	}
 	flashrom_set_log_callback (fu_plugin_flashrom_debug_cb);
-	if (flashrom_programmer_init (&data->flashprog, "internal", NULL)) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "programmer initialization failed");
-		return FALSE;
-	}
-	rc = flashrom_flash_probe (&data->flashctx, data->flashprog, NULL);
-	if (rc == 3) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "flash probe failed: multiple chips were found");
-		return FALSE;
-	}
-	if (rc == 2) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "flash probe failed: no chip was found");
-		return FALSE;
-	}
-	if (rc != 0) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "flash probe failed: unknown error");
-		return FALSE;
-	}
-	data->flash_size = flashrom_flash_getsize (data->flashctx);
-	if (data->flash_size == 0) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "flash size zero");
-		return FALSE;
-	}
-
-	/* success */
-	fu_plugin_device_add (plugin, device);
-	fu_plugin_cache_add (plugin, fu_device_get_id (device), device);
-	return TRUE;
-}
-
-gboolean
-fu_plugin_update_prepare (FuPlugin *plugin,
-			  FwupdInstallFlags flags,
-			  FuDevice *device,
-			  GError **error)
-{
-	FuPluginData *data = fu_plugin_get_data (plugin);
-	g_autofree gchar *firmware_orig = NULL;
-	g_autofree gchar *basename = NULL;
-
-	/* not us */
-	if (fu_plugin_cache_lookup (plugin, fu_device_get_id (device)) == NULL)
-		return TRUE;
-
-	/* if the original firmware doesn't exist, grab it now */
-	basename = g_strdup_printf ("flashrom-%s.bin", fu_device_get_id (device));
-	firmware_orig = g_build_filename (FWUPD_LOCALSTATEDIR, "lib", "fwupd",
-					  "builder", basename, NULL);
-	if (!fu_common_mkdir_parent (firmware_orig, error))
-		return FALSE;
-	if (!g_file_test (firmware_orig, G_FILE_TEST_EXISTS)) {
-		g_autofree guint8 *newcontents = g_malloc0 (data->flash_size);
-		g_autoptr(GBytes) buf = NULL;
-
-		fu_device_set_status (device, FWUPD_STATUS_DEVICE_READ);
-		if (flashrom_image_read (data->flashctx, newcontents, data->flash_size)) {
-			g_set_error_literal (error,
-					     FWUPD_ERROR,
-					     FWUPD_ERROR_READ,
-					     "failed to back up original firmware");
-			return FALSE;
-		}
-		buf = g_bytes_new_static (newcontents, data->flash_size);
-		if (!fu_common_set_contents_bytes (firmware_orig, buf, error))
-			return FALSE;
-	}
-
-	return TRUE;
-}
-
-gboolean
-fu_plugin_update (FuPlugin *plugin,
-		  FuDevice *device,
-		  GBytes *blob_fw,
-		  FwupdInstallFlags flags,
-		  GError **error)
-{
-	FuPluginData *data = fu_plugin_get_data (plugin);
-	gsize sz = 0;
-	gint rc;
-	const guint8 *buf = g_bytes_get_data (blob_fw, &sz);
-
-	if (flashrom_layout_read_from_ifd (&data->layout, data->flashctx, NULL, 0)) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_READ,
-				     "failed to read layout from Intel ICH descriptor");
-		return FALSE;
-	}
-
-	/* include bios region for safety reasons */
-	if (flashrom_layout_include_region (data->layout, "bios")) {
-		g_set_error_literal (error,
-				     FWUPD_ERROR,
-				     FWUPD_ERROR_NOT_SUPPORTED,
-				     "invalid region name");
-		return FALSE;
-	}
-
-	/* write region */
-	flashrom_layout_set (data->flashctx, data->layout);
-	if (sz != data->flash_size) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_NOT_SUPPORTED,
-			     "invalid image size 0x%x, expected 0x%x",
-			     (guint) sz, (guint) data->flash_size);
-		return FALSE;
-	}
-
-	fu_device_set_status (device, FWUPD_STATUS_DEVICE_WRITE);
-	fu_device_set_progress (device, 0); /* urgh */
-	rc = flashrom_image_write (data->flashctx, (void *) buf, sz, NULL /* refbuffer */);
-	if (rc != 0) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_WRITE,
-			     "image write failed, err=%i", rc);
-		return FALSE;
-	}
-
-	fu_device_set_status (device, FWUPD_STATUS_DEVICE_VERIFY);
-	if (flashrom_image_verify (data->flashctx, (void *) buf, sz)) {
-		g_set_error (error,
-			     FWUPD_ERROR,
-			     FWUPD_ERROR_WRITE,
-			     "image verify failed");
-		return FALSE;
-	}
-
-	/* success */
 	return TRUE;
 }

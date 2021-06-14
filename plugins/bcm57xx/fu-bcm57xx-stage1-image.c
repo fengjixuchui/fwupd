@@ -6,8 +6,7 @@
 
 #include "config.h"
 
-#include "fu-common.h"
-#include "fu-common-version.h"
+#include <fwupdplugin.h>
 
 #include "fu-bcm57xx-common.h"
 #include "fu-bcm57xx-stage1-image.h"
@@ -122,7 +121,7 @@ fu_bcm57xx_stage1_image_write (FuFirmware *firmware, GError **error)
 static void
 fu_bcm57xx_stage1_image_init (FuBcm57xxStage1Image *self)
 {
-	fu_firmware_set_alignment (FU_FIRMWARE (self), 2);
+	fu_firmware_set_alignment (FU_FIRMWARE (self), FU_FIRMWARE_ALIGNMENT_4);
 }
 
 static void

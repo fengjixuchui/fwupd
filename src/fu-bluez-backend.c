@@ -18,6 +18,8 @@ struct _FuBluezBackend {
 
 G_DEFINE_TYPE (FuBluezBackend, fu_bluez_backend, FU_TYPE_BACKEND)
 
+#define FU_BLUEZ_BACKEND_TIMEOUT	1500	/* ms */
+
 static void
 fu_bluez_backend_object_properties_changed (FuBluezBackend *self, GDBusProxy *proxy)
 {
@@ -111,20 +113,76 @@ fu_bluez_backend_object_removed_cb (GDBusObjectManager *manager,
 	fu_backend_device_removed (FU_BACKEND (self), device_tmp);
 }
 
+typedef struct {
+	GDBusObjectManager	*object_manager;
+	GMainLoop		*loop;
+	GError			**error;
+	GCancellable		*cancellable;
+	guint			 timeout_id;
+} FuBluezBackendHelper;
+
+static void
+fu_bluez_backend_helper_free (FuBluezBackendHelper *helper)
+{
+	if (helper->object_manager != NULL)
+		g_object_unref (helper->object_manager);
+	if (helper->timeout_id != 0)
+		g_source_remove (helper->timeout_id);
+	g_cancellable_cancel (helper->cancellable);
+	g_main_loop_unref (helper->loop);
+	g_free (helper);
+}
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(FuBluezBackendHelper, fu_bluez_backend_helper_free)
+
+static void
+fu_bluez_backend_connect_cb (GObject *source_object,
+			     GAsyncResult *res,
+			     gpointer user_data)
+{
+	FuBluezBackendHelper *helper = (FuBluezBackendHelper *) user_data;
+	helper->object_manager =
+		g_dbus_object_manager_client_new_for_bus_finish (res, helper->error);
+	g_main_loop_quit (helper->loop);
+}
+
+static gboolean
+fu_bluez_backend_timeout_cb (gpointer user_data)
+{
+	FuBluezBackendHelper *helper = (FuBluezBackendHelper *) user_data;
+	g_cancellable_cancel (helper->cancellable);
+	helper->timeout_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
 static gboolean
 fu_bluez_backend_setup (FuBackend *backend, GError **error)
 {
 	FuBluezBackend *self = FU_BLUEZ_BACKEND (backend);
+	g_autoptr(FuBluezBackendHelper) helper = g_new0 (FuBluezBackendHelper, 1);
 
-	self->object_manager = g_dbus_object_manager_client_new_for_bus_sync (
+	/* in some circumstances the bluez daemon will just hang... do not wait
+	 * forever and make fwupd startup also fail */
+	helper->error = error;
+	helper->loop = g_main_loop_new (NULL, FALSE);
+	helper->cancellable = g_cancellable_new ();
+	helper->timeout_id = g_timeout_add (FU_BLUEZ_BACKEND_TIMEOUT,
+					    fu_bluez_backend_timeout_cb,
+					    helper);
+	g_dbus_object_manager_client_new_for_bus (
 					G_BUS_TYPE_SYSTEM,
 					G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_NONE,
 					"org.bluez",
 					"/",
 					NULL, NULL, NULL,
-					NULL, error);
-	if (self->object_manager == NULL)
+					helper->cancellable,
+					fu_bluez_backend_connect_cb,
+					helper);
+	g_main_loop_run (helper->loop);
+	if (helper->object_manager == NULL)
 		return FALSE;
+	self->object_manager = g_steal_pointer (&helper->object_manager);
+
 	g_signal_connect (self->object_manager, "object-added",
 			  G_CALLBACK (fu_bluez_backend_object_added_cb), self);
 	g_signal_connect (self->object_manager, "object-removed",
@@ -172,7 +230,6 @@ fu_bluez_backend_class_init (FuBluezBackendClass *klass)
 	object_class->finalize = fu_bluez_backend_finalize;
 	klass_backend->setup = fu_bluez_backend_setup;
 	klass_backend->coldplug = fu_bluez_backend_coldplug;
-	klass_backend->recoldplug = fu_bluez_backend_coldplug;
 }
 
 FuBackend *

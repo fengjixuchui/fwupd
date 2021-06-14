@@ -6,7 +6,7 @@
 
 #include "config.h"
 
-#include "fu-common.h"
+#include <fwupdplugin.h>
 
 #include "fu-bcm57xx-common.h"
 #include "fu-bcm57xx-stage2-image.h"
@@ -59,7 +59,7 @@ fu_bcm57xx_stage2_image_write (FuFirmware *image, GError **error)
 	fu_byte_array_append_uint32 (blob,
 				     g_bytes_get_size (fw_nocrc) + sizeof(guint32),
 				     G_BIG_ENDIAN);
-	g_byte_array_append (blob, buf, bufsz);
+	fu_byte_array_append_bytes (blob, fw_nocrc);
 
 	/* add CRC */
 	fu_byte_array_append_uint32 (blob, fu_bcm57xx_nvram_crc (buf, bufsz), G_LITTLE_ENDIAN);

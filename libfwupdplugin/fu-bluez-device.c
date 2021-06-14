@@ -18,12 +18,11 @@
 #define DEFAULT_PROXY_TIMEOUT	5000
 
 /**
- * SECTION:fu-bluez-device
- * @short_description: a BlueZ Bluetooth device
+ * FuBluezDevice:
  *
- * An object that represents a BlueZ Bluetooth device.
+ * A BlueZ Bluetooth device.
  *
- * See also: #FuBluezDevice
+ * See also: [class@FuDevice]
  */
 
 typedef struct {
@@ -370,9 +369,9 @@ fu_bluez_device_probe (FuDevice *device, GError **error)
 
 /**
  * fu_bluez_device_read:
- * @self: A #FuBluezDevice
- * @uuid: The UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
- * @error: A #GError, or %NULL
+ * @self: a #FuBluezDevice
+ * @uuid: the UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
+ * @error: (nullable): optional return location for an error
  *
  * Reads from a UUID on the device.
  *
@@ -400,7 +399,7 @@ fu_bluez_device_read (FuBluezDevice *self, const gchar *uuid, GError **error)
 	 * Call the "ReadValue" method through the proxy synchronously.
 	 *
 	 * The method takes one argument: an array of dicts of
-	 * {string:value} specifing the options (here the option is
+	 * {string:value} specifying the options (here the option is
 	 * "offset":0.
 	 * The result is a byte array.
 	 */
@@ -427,9 +426,9 @@ fu_bluez_device_read (FuBluezDevice *self, const gchar *uuid, GError **error)
 
 /**
  * fu_bluez_device_read_string:
- * @self: A #FuBluezDevice
- * @uuid: The UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
- * @error: A #GError, or %NULL
+ * @self: a #FuBluezDevice
+ * @uuid: the UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
+ * @error: (nullable): optional return location for an error
  *
  * Reads a string from a UUID on the device.
  *
@@ -448,9 +447,10 @@ fu_bluez_device_read_string (FuBluezDevice *self, const gchar *uuid, GError **er
 
 /**
  * fu_bluez_device_write:
- * @self: A #FuBluezDevice
- * @uuid: The UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
- * @error: A #GError, or %NULL
+ * @self: a #FuBluezDevice
+ * @uuid: the UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
+ * @buf: data array
+ * @error: (nullable): optional return location for an error
  *
  * Writes to a UUID on the device.
  *
@@ -507,8 +507,9 @@ fu_bluez_device_write (FuBluezDevice *self,
 
 /**
  * fu_bluez_device_notify_start:
- * @uuid: The UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
- * @error: A #GError, or %NULL
+ * @self: a #FuBluezDevice
+ * @uuid: the UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
+ * @error: (nullable): optional return location for an error
  *
  * Enables notifications for property changes in a UUID (StartNotify
  * method).
@@ -543,8 +544,9 @@ fu_bluez_device_notify_start (FuBluezDevice *self, const gchar *uuid, GError **e
 
 /**
  * fu_bluez_device_notify_stop:
- * @uuid: The UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
- * @error: A #GError, or %NULL
+ * @self: a #FuBluezDevice
+ * @uuid: the UUID, e.g. `00cde35c-7062-11eb-9439-0242ac130002`
+ * @error: (nullable): optional return location for an error
  *
  * Disables notifications for property changes in a UUID (StopNotify
  * method).

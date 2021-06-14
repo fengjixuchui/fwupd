@@ -6,8 +6,8 @@
 
 #include "config.h"
 
-#include "fu-common.h"
-#include "fu-common-version.h"
+#include <fwupdplugin.h>
+
 #include "fu-pxi-firmware.h"
 
 #define PIXART_RF_FW_HEADER_SIZE		32	/* bytes */
@@ -28,10 +28,12 @@ fu_pxi_firmware_get_model_name (FuPxiFirmware *self)
 }
 
 static void
-fu_pxi_firmware_to_string (FuFirmware *firmware, guint idt, GString *str)
+fu_pxi_firmware_export (FuFirmware *firmware,
+			FuFirmwareExportFlags flags,
+			XbBuilderNode *bn)
 {
 	FuPxiFirmware *self = FU_PXI_FIRMWARE (firmware);
-	fu_common_string_append_kv (str, idt, "ModelName", self->model_name);
+	fu_xmlb_builder_insert_kv (bn, "model_name", self->model_name);
 }
 
 static gboolean
@@ -146,9 +148,7 @@ fu_pxi_firmware_write (FuFirmware *firmware, GError **error)
 	if (blob == NULL)
 		return NULL;
 	buf = g_byte_array_sized_new (g_bytes_get_size (blob) + sizeof (fw_header));
-	g_byte_array_append (buf,
-			     g_bytes_get_data (blob, NULL),
-			     g_bytes_get_size (blob));
+	fu_byte_array_append_bytes (buf, blob);
 
 	/* footer */
 	if (!fu_memcpy_safe (fw_header, sizeof (fw_header),
@@ -208,7 +208,7 @@ fu_pxi_firmware_class_init (FuPxiFirmwareClass *klass)
 	klass_firmware->parse = fu_pxi_firmware_parse;
 	klass_firmware->build = fu_pxi_firmware_build;
 	klass_firmware->write = fu_pxi_firmware_write;
-	klass_firmware->to_string = fu_pxi_firmware_to_string;
+	klass_firmware->export = fu_pxi_firmware_export;
 }
 
 FuFirmware *

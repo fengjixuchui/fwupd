@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.6.0',
+  version : '1.6.1',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -150,6 +150,7 @@ add_project_arguments('-DFWUPD_DISABLE_DEPRECATED', language : 'c')
 
 # needed for symlink() and BYTE_ORDER
 add_project_arguments('-D_BSD_SOURCE', language : 'c')
+add_project_arguments('-D__BSD_VISIBLE', language : 'c')
 add_project_arguments('-D_XOPEN_SOURCE=700', language : 'c')
 
 # needed for memfd_create()
@@ -242,7 +243,7 @@ if build_daemon
     warning('Polkit is disabled, the daemon will allow ALL client actions')
   endif
   udevdir = get_option('udevdir')
-  if udevdir == ''
+  if udevdir == '' and host_machine.system() == 'linux'
     udev = dependency('udev')
     udevdir = udev.get_pkgconfig_variable('udevdir')
   endif
@@ -251,7 +252,7 @@ libm = cc.find_library('m', required: false)
 libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gcab_dep'])
 gcab = find_program('gcab', required : get_option('tests'))
 bashcomp = dependency('bash-completion', required: false)
-python3 = find_program('python3')
+python3 = find_program('python3.8', 'python3', 'python3.9')
 
 if get_option('gnutls')
   gnutls = dependency('gnutls', version : '>= 3.6.0')
@@ -265,10 +266,22 @@ else
   endif
 endif
 
+if get_option('lzma')
+  lzma = dependency('liblzma')
+  conf.set('HAVE_LZMA', '1')
+else
+  if get_option('plugin_intel_spi')
+    error('plugin_intel_spi needs -Dlzma=true to work')
+  endif
+endif
+
 platform_deps = []
 if get_option('default_library') != 'static'
   if host_machine.system() == 'windows'
     platform_deps += cc.find_library('shlwapi')
+  endif
+  if host_machine.system() == 'freebsd'
+    platform_deps += cc.find_library('efivar')
   endif
 endif
 
@@ -309,6 +322,15 @@ endif
 if cc.has_header('fnmatch.h')
   conf.set('HAVE_FNMATCH_H', '1')
 endif
+if cc.has_header('kenv.h')
+  conf.set('HAVE_KENV_H', '1')
+endif
+if cc.has_header('malloc.h')
+  conf.set('HAVE_MALLOC_H', '1')
+  if cc.has_function('malloc_trim', prefix: '#include <malloc.h>')
+	 conf.set('HAVE_MALLOC_TRIM', '1')
+  endif
+endif
 if cc.has_header('cpuid.h') and cc.has_header_symbol('cpuid.h', '__get_cpuid_count') and (host_cpu == 'x86' or host_cpu == 'x86_64')
   conf.set('HAVE_CPUID_H', '1')
 else
@@ -334,6 +356,12 @@ endif
 if cc.has_header_symbol('locale.h', 'LC_MESSAGES')
   conf.set('HAVE_LC_MESSAGES', '1')
 endif
+if cc.has_header_symbol('fcntl.h', 'F_WRLCK')
+  conf.set('HAVE_WRLCK', '1')
+endif
+if cc.has_header_symbol('fcntl.h', 'F_OFD_SETLK')
+  conf.set('HAVE_OFD', '1')
+endif
 if cc.has_function('pwrite', args : '-D_XOPEN_SOURCE')
   conf.set('HAVE_PWRITE', '1')
 endif
@@ -346,37 +374,33 @@ else
 endif
 
 if build_standalone and get_option('plugin_uefi_capsule')
-  cairo = dependency('cairo')
-  fontconfig = cc.find_library('fontconfig')
-  freetype = cc.find_library('freetype')
   efiboot = dependency('efiboot')
-  objcopy = find_program ('objcopy')
-  readelf = find_program ('readelf')
-  genpeimg = find_program ('genpeimg', required: false)
 
   efi_app_location = join_paths(libexecdir, 'fwupd', 'efi')
-  conf.set_quoted ('EFI_APP_LOCATION', efi_app_location)
+  conf.set_quoted('EFI_APP_LOCATION', efi_app_location)
 
   if host_cpu == 'x86'
           EFI_MACHINE_TYPE_NAME = 'ia32'
-          gnu_efi_arch = 'ia32'
   elif host_cpu == 'x86_64'
           EFI_MACHINE_TYPE_NAME = 'x64'
-          gnu_efi_arch = 'x86_64'
   elif host_cpu == 'arm'
           EFI_MACHINE_TYPE_NAME = 'arm'
-          gnu_efi_arch = 'arm'
   elif host_cpu == 'aarch64'
           EFI_MACHINE_TYPE_NAME = 'aa64'
-          gnu_efi_arch = 'aarch64'
   else
           EFI_MACHINE_TYPE_NAME = ''
-          gnu_efi_arch = ''
   endif
   conf.set_quoted('EFI_MACHINE_TYPE_NAME', EFI_MACHINE_TYPE_NAME)
-  r = run_command([python3, 'po/test-deps'])
-  if r.returncode() != 0
-    error(r.stdout())
+
+  if get_option('efi_binary')
+    efi_binary = dependency ('fwupd-efi', fallback: ['fwupd-efi', 'fwupd_efi_dep'])
+  endif
+
+  if get_option('plugin_uefi_capsule_splash')
+    r = run_command([python3, 'po/test-deps'])
+    if r.returncode() != 0
+      error(r.stdout())
+    endif
   endif
 endif
 
@@ -391,8 +415,7 @@ endif
 if build_standalone and get_option('plugin_modem_manager')
   libmm_glib = dependency('mm-glib', version : '>= 1.10.0')
   add_project_arguments('-DMM_REQUIRED_VERSION="1.10.0"', language : 'c')
-  libqmi_glib = dependency('qmi-glib', version : '>= 1.22.0')
-  add_project_arguments('-DQMI_REQUIRED_VERSION="1.23.1"', language : 'c')
+  libqmi_glib = dependency('qmi-glib', version : '>= 1.23.1')
 endif
 
 if get_option('soup_session_compat')
@@ -462,6 +485,7 @@ conf.set_quoted('FWUPD_DATADIR', datadir)
 conf.set_quoted('FWUPD_LOCALSTATEDIR', localstatedir)
 conf.set_quoted('FWUPD_SYSCONFDIR', sysconfdir)
 conf.set_quoted('FWUPD_LOCALEDIR', localedir)
+conf.set_quoted('FWUPD_FUZZINGSRCDIR', join_paths(meson.source_root(), 'src', 'fuzzing'))
 
 if build_standalone
 if host_machine.system() == 'windows'
@@ -511,10 +535,20 @@ endif
 
 root_incdir = include_directories('.')
 
-if get_option('gtkdoc')
-  gtkdocscan = find_program('gtkdoc-scan', required : true)
-  subdir('docs')
+if get_option('docs') == 'gtkdoc'
+  gtkdocscan = find_program('gtkdoc-scan')
+elif get_option('docs') == 'docgen'
+  r = run_command([python3, 'docs/test-deps.py'])
+  if r.returncode() != 0
+    error(r.stdout())
+  endif
+  gidocgen_dep = dependency('gi-docgen',
+    version: '>= 2021.1',
+    fallback: ['gi-docgen', 'dummy_dep'],
+  )
+  gidocgen = find_program('gi-docgen')
 endif
+
 subdir('libfwupd')
 if build_daemon and get_option('polkit')
   subdir('policy')
@@ -527,6 +561,7 @@ if build_standalone
   subdir('plugins')
   subdir('contrib')
 endif
+subdir('docs')
 
 if get_option('systemd') and build_daemon
   meson.add_install_script('meson_post_install.sh', systemdunitdir, localstatedir)
@@ -549,9 +584,9 @@ run_target('codespell',
     codespell,
     meson.source_root(),
     '--write-changes',
-    '--builtin', 'en-GB_to_en-US',
-    '--skip', '*.po,*.csv,*.svg,*.p7c,subprojects,.git,pcrs,build*',
-    '--ignore-words-list', 'conexant,Conexant,gir,GIR,hsi,HSI,cancelled,Cancelled',
+    '--builtin', 'clear,informal,en-GB_to_en-US',
+    '--skip', '*.po,*.csv,*.svg,*.p7c,subprojects,.git,pcrs,build*,.ossfuzz',
+    '--ignore-words-list', 'conexant,Conexant,gir,GIR,hsi,HSI,cancelled,Cancelled,te',
   ]
 )
 endif

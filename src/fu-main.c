@@ -14,7 +14,9 @@
 #include <glib/gi18n.h>
 #include <glib-unix.h>
 #include <locale.h>
+#ifdef HAVE_MALLOC_H
 #include <malloc.h>
+#endif
 #ifdef HAVE_POLKIT
 #include <polkit/polkit.h>
 #endif
@@ -785,47 +787,6 @@ fu_main_install_task_sort_cb (gconstpointer a, gconstpointer b)
 	return fu_install_task_compare (task_a, task_b);
 }
 
-static GPtrArray *
-fu_main_get_device_family (FuMainAuthHelper *helper, GError **error)
-{
-	FuDevice *parent;
-	GPtrArray *children;
-	g_autoptr(FuDevice) device = NULL;
-	g_autoptr(GPtrArray) devices_possible = NULL;
-
-	/* get the device */
-	device = fu_engine_get_device (helper->priv->engine, helper->device_id, error);
-	if (device == NULL)
-		return NULL;
-
-	/* device itself */
-	devices_possible = g_ptr_array_new_with_free_func ((GDestroyNotify) g_object_unref);
-	g_ptr_array_add (devices_possible, g_object_ref (device));
-
-	/* add device children */
-	children = fu_device_get_children (device);
-	for (guint i = 0; i < children->len; i++) {
-		FuDevice *child = g_ptr_array_index (children, i);
-		g_ptr_array_add (devices_possible, g_object_ref (child));
-	}
-
-	/* add parent and siblings, not including the device itself */
-	parent = fu_device_get_parent (device);
-	if (parent != NULL) {
-		GPtrArray *siblings = fu_device_get_children (parent);
-		g_ptr_array_add (devices_possible, g_object_ref (parent));
-		for (guint i = 0; i < siblings->len; i++) {
-			FuDevice *sibling = g_ptr_array_index (siblings, i);
-			if (sibling == device)
-				continue;
-			g_ptr_array_add (devices_possible, g_object_ref (sibling));
-		}
-	}
-
-	/* success */
-	return g_steal_pointer (&devices_possible);
-}
-
 static gboolean
 fu_main_install_with_helper (FuMainAuthHelper *helper_ref, GError **error)
 {
@@ -841,7 +802,13 @@ fu_main_install_with_helper (FuMainAuthHelper *helper_ref, GError **error)
 		if (devices_possible == NULL)
 			return FALSE;
 	} else {
-		devices_possible = fu_main_get_device_family (helper, error);
+		g_autoptr(FuDevice) device = NULL;
+		device = fu_engine_get_device (priv->engine, helper->device_id, error);
+		if (device == NULL)
+			return FALSE;
+		devices_possible = fu_engine_get_devices_by_composite_id (priv->engine,
+									  fu_device_get_composite_id (device),
+									  error);
 		if (devices_possible == NULL)
 			return FALSE;
 	}
@@ -1544,7 +1511,11 @@ fu_main_daemon_method_call (GDBusConnection *connection, const gchar *sender,
 		feature_flags = feature_flags_u64;
 		g_hash_table_insert (priv->sender_features,
 				     g_strdup (sender),
+#if GLIB_CHECK_VERSION(2,67,4)
+				     g_memdup2 (&feature_flags, sizeof(feature_flags)));
+#else
 				     g_memdup (&feature_flags, sizeof(feature_flags)));
+#endif
 		g_dbus_method_invocation_return_value (invocation, NULL);
 		return;
 	}
@@ -1785,6 +1756,10 @@ fu_main_on_name_lost_cb (GDBusConnection *connection,
 			 gpointer user_data)
 {
 	FuMainPrivate *priv = (FuMainPrivate *) user_data;
+	if (priv->update_in_progress) {
+		g_warning ("name lost during a firmware update, ignoring");
+		return;
+	}
 	g_warning ("another service has claimed the dbus name %s", name);
 	g_main_loop_quit (priv->loop);
 }
@@ -2037,8 +2012,10 @@ main (int argc, char *argv[])
 	else if (timed_exit)
 		g_timeout_add_seconds (5, fu_main_timed_exit_cb, priv->loop);
 
+#ifdef HAVE_MALLOC_TRIM
 	/* drop heap except one page */
 	malloc_trim (4096);
+#endif
 
 	/* wait */
 	g_message ("Daemon ready for requests (locale %s)", g_getenv ("LANG"));

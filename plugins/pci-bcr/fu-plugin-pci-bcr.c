@@ -6,7 +6,7 @@
 
 #include "config.h"
 
-#include "fu-plugin-vfuncs.h"
+#include <fwupdplugin.h>
 
 struct FuPluginData {
 	gboolean		 has_device;
@@ -21,10 +21,11 @@ struct FuPluginData {
 void
 fu_plugin_init (FuPlugin *plugin)
 {
+	FuContext *ctx = fu_plugin_get_context (plugin);
 	FuPluginData *priv = fu_plugin_alloc_data (plugin, sizeof (FuPluginData));
 	fu_plugin_set_build_hash (plugin, FU_BUILD_HASH);
-	fu_plugin_add_udev_subsystem (plugin, "pci");
-	fu_plugin_add_possible_quirk_key (plugin, "PciBcrAddr");
+	fu_context_add_udev_subsystem (ctx, "pci");
+	fu_context_add_quirk_key (ctx, "PciBcrAddr");
 
 	/* this is true except for some Atoms */
 	priv->bcr_addr = 0xdc;
@@ -35,8 +36,9 @@ fu_plugin_pci_bcr_set_updatable (FuPlugin *plugin, FuDevice *dev)
 {
 	FuPluginData *priv = fu_plugin_get_data (plugin);
 	if ((priv->bcr & BCR_WPD) == 0 && (priv->bcr & BCR_BLE) > 0) {
-		fu_device_remove_flag (dev, FWUPD_DEVICE_FLAG_UPDATABLE);
-		fu_device_set_update_error (dev, "BIOS locked");
+		fu_device_inhibit (dev, "bcr-locked", "BIOS locked");
+	} else {
+		fu_device_uninhibit (dev, "bcr-locked");
 	}
 }
 

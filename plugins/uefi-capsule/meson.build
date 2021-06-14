@@ -1,5 +1,4 @@
 if get_option('plugin_uefi_capsule')
-subdir('efi')
 
 cargs = ['-DG_LOG_DOMAIN="FuPluginUefiCapsule"']
 
@@ -10,6 +9,15 @@ endif
 
 install_data(['uefi-capsule.quirk'],
   install_dir: join_paths(datadir, 'fwupd', 'quirks.d'))
+
+backend_srcs = []
+if host_machine.system() == 'linux'
+  backend_srcs += 'fu-uefi-backend-linux.c'
+elif host_machine.system() == 'freebsd'
+  backend_srcs += 'fu-uefi-backend-freebsd.c'
+else
+  error('no ESRT support for @0@'.format(host_machine.system()))
+endif
 
 shared_module('fu_plugin_uefi_capsule',
   fu_hash,
@@ -23,6 +31,7 @@ shared_module('fu_plugin_uefi_capsule',
     'fu-uefi-devpath.c',
     'fu-uefi-pcrs.c',
     'fu-uefi-update-info.c',
+    backend_srcs,
   ],
   include_directories : [
     root_incdir,
@@ -57,6 +66,7 @@ fwupdate = executable(
     'fu-uefi-devpath.c',
     'fu-uefi-pcrs.c',
     'fu-uefi-update-info.c',
+    backend_srcs,
   ],
   include_directories : [
     root_incdir,
@@ -78,19 +88,12 @@ fwupdate = executable(
 )
 
 if get_option('man')
-  custom_target('fwupdate-man',
-    input : fwupdate,
+  configure_file(
+    input : 'fwupdate.1',
     output : 'fwupdate.1',
-    command : [
-      help2man, '@INPUT@',
-      '--no-info',
-      '--output', '@OUTPUT@',
-      '--name', 'Debugging utility for UEFI firmware updates',
-      '--manual', 'User Commands',
-      '--version-string', fwupd_version,
-    ],
-    install : true,
-    install_dir : join_paths(mandir, 'man1'),
+    configuration : conf,
+    install: true,
+    install_dir: join_paths(mandir, 'man1'),
   )
 endif
 
@@ -107,24 +110,26 @@ foreach ux_lingua : ux_linguas
   ux_capsule_pofiles += join_paths(meson.source_root(), 'po', '@0@.po'.format(ux_lingua))
 endforeach
 
-# add the archive of pregenerated images
-custom_target('ux-capsule-tar',
-  input : [
-    join_paths(meson.source_root(), 'po', 'LINGUAS'),
-    join_paths(meson.current_source_dir(), 'make-images.py'),
-    ux_capsule_pofiles,
-  ],
-  output : 'uefi-capsule-ux.tar.xz',
-  command : [
-    python3.path(),
-    join_paths(meson.current_source_dir(), 'make-images.py'),
-    '--podir', join_paths(meson.source_root(), 'po'),
-    '--label', 'Installing firmware update…',
-    '--out', '@OUTPUT@',
-  ],
-  install: true,
-  install_dir: join_paths(datadir, 'fwupd'),
-)
+if get_option('plugin_uefi_capsule_splash')
+  # add the archive of pregenerated images
+  custom_target('ux-capsule-tar',
+    input : [
+      join_paths(meson.source_root(), 'po', 'LINGUAS'),
+      join_paths(meson.current_source_dir(), 'make-images.py'),
+      ux_capsule_pofiles,
+    ],
+    output : 'uefi-capsule-ux.tar.xz',
+    command : [
+      python3.path(),
+      join_paths(meson.current_source_dir(), 'make-images.py'),
+      '--podir', join_paths(meson.source_root(), 'po'),
+      '--label', 'Installing firmware update…',
+      '--out', '@OUTPUT@',
+    ],
+    install: true,
+    install_dir: join_paths(datadir, 'fwupd'),
+  )
+endif
 
 if get_option('tests')
   testdatadir = join_paths(meson.current_source_dir(), 'tests')
@@ -142,6 +147,7 @@ if get_option('tests')
       'fu-uefi-pcrs.c',
       'fu-uefi-update-info.c',
       'fu-ucs2.c',
+      backend_srcs,
     ],
     include_directories : [
       root_incdir,

@@ -15,7 +15,7 @@
 %global enable_ci 0
 %global enable_tests 1
 %global enable_dummy 1
-%global __meson_wrap_mode default
+%global __meson_wrap_mode nodownload
 
 # fwupd.efi is only available on these arches
 %ifarch x86_64 aarch64
@@ -73,7 +73,6 @@ BuildRequires: gtk-doc
 BuildRequires: gnutls-devel
 BuildRequires: gnutls-utils
 BuildRequires: meson
-BuildRequires: help2man
 BuildRequires: json-glib-devel >= %{json_glib_version}
 BuildRequires: vala
 BuildRequires: bash-completion
@@ -89,15 +88,13 @@ BuildRequires: libqmi-devel >= 1.22.0
 
 %if 0%{?have_uefi}
 BuildRequires: efivar-devel >= 33
-BuildRequires: python3 python3-cairo python3-gobject python3-pillow
+BuildRequires: python3 python3-cairo python3-gobject
 BuildRequires: pango-devel
 BuildRequires: cairo-devel cairo-gobject-devel
 BuildRequires: freetype
 BuildRequires: fontconfig
 BuildRequires: google-noto-sans-cjk-ttc-fonts
-BuildRequires: gnu-efi-devel
 BuildRequires: tpm2-tss-devel >= 2.2.3
-BuildRequires: pesign
 %endif
 
 %if 0%{?have_dell}
@@ -146,6 +143,7 @@ Recommends: %{name}-plugin-modem-manager
 Recommends: %{name}-plugin-flashrom
 %endif
 %if 0%{?have_uefi}
+Recommends: %{name}-efi
 Recommends: %{name}-plugin-uefi-capsule-data
 %endif
 
@@ -225,7 +223,7 @@ fwupd wrapper for Qubes OS
 %if 0%{?enable_ci}
     --werror \
 %endif
-    -Dgtkdoc=true \
+    -Ddocs=gtkdoc \
 %if 0%{?enable_tests}
     -Dtests=true \
 %else
@@ -250,12 +248,8 @@ fwupd wrapper for Qubes OS
 %if 0%{?have_uefi}
     -Dplugin_uefi_capsule=true \
     -Dplugin_uefi_pk=true \
-    -Defi_sbat_distro_id="fedora" \
-    -Defi_sbat_distro_summary="The Fedora Project" \
-    -Defi_sbat_distro_pkgname="%{name}" \
-    -Defi_sbat_distro_version="%{version}" \
-    -Defi_sbat_distro_url="https://src.fedoraproject.org/rpms/%{name}" \
     -Dplugin_tpm=true \
+    -Defi_binary=false \
 %else
     -Dplugin_uefi_capsule=false \
     -Dplugin_uefi_pk=false \
@@ -293,21 +287,6 @@ fwupd wrapper for Qubes OS
 %install
 %meson_install
 
-# sign fwupd.efi loader
-%if 0%{?have_uefi}
-%ifarch x86_64
-%global efiarch x64
-%endif
-%ifarch aarch64
-%global efiarch aa64
-%endif
-%global fwup_efi_fn $RPM_BUILD_ROOT%{_libexecdir}/fwupd/efi/fwupd%{efiarch}.efi
-%pesign -s -i %{fwup_efi_fn} -o %{fwup_efi_fn}.tmp
-%define __pesign_client_cert fwupd-signer
-%pesign -s -i %{fwup_efi_fn}.tmp -o %{fwup_efi_fn}.signed
-rm -vf %{fwup_efi_fn}.tmp
-%endif
-
 mkdir -p --mode=0700 $RPM_BUILD_ROOT%{_localstatedir}/lib/fwupd/gnupg
 
 # workaround for https://bugzilla.redhat.com/show_bug.cgi?id=1757948
@@ -330,7 +309,6 @@ done
 
 %postun
 %systemd_postun_with_restart fwupd.service
-%systemd_postun_with_restart pesign.service
 
 %files -f %{name}.lang
 %doc README.md AUTHORS
@@ -349,8 +327,6 @@ done
 %endif
 %{_libexecdir}/fwupd/fwupdoffline
 %if 0%{?have_uefi}
-%{_libexecdir}/fwupd/efi/*.efi
-%{_libexecdir}/fwupd/efi/*.efi.signed
 %{_bindir}/fwupdate
 %{_bindir}/fwupdtpmevlog
 %endif
@@ -425,8 +401,10 @@ done
 %dir %{_libdir}/fwupd-plugins-3
 %{_libdir}/fwupd-plugins-3/libfu_plugin_acpi_dmar.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_acpi_facp.so
+%{_libdir}/fwupd-plugins-3/libfu_plugin_acpi_phat.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_altos.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_amt.so
+%{_libdir}/fwupd-plugins-3/libfu_plugin_analogix.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ata.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_bcm57xx.so
 %{_libdir}/fwupd-plugins-3/libfu_plugin_ccgx.so

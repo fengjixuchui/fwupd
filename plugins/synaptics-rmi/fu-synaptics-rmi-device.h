@@ -6,8 +6,9 @@
 
 #pragma once
 
+#include <fwupdplugin.h>
+
 #include "fu-synaptics-rmi-common.h"
-#include "fu-udev-device.h"
 
 #define FU_TYPE_SYNAPTICS_RMI_DEVICE (fu_synaptics_rmi_device_get_type ())
 G_DECLARE_DERIVABLE_TYPE (FuSynapticsRmiDevice, fu_synaptics_rmi_device, FU, SYNAPTICS_RMI_DEVICE, FuUdevDevice)
@@ -15,6 +16,7 @@ G_DECLARE_DERIVABLE_TYPE (FuSynapticsRmiDevice, fu_synaptics_rmi_device, FU, SYN
 typedef enum {
 	FU_SYNAPTICS_RMI_DEVICE_FLAG_NONE		= 0,
 	FU_SYNAPTICS_RMI_DEVICE_FLAG_ALLOW_FAILURE	= 1 << 0,
+	FU_SYNAPTICS_RMI_DEVICE_FLAG_FORCE		= 1 << 1,
 } FuSynapticsRmiDeviceFlags;
 
 struct _FuSynapticsRmiDeviceClass
@@ -77,7 +79,7 @@ typedef struct {
 #define RMI_F34_BLOCK_DATA_V1_OFFSET			1
 
 #define RMI_F34_ENABLE_WAIT_MS				300		/* ms */
-#define RMI_F34_IDLE_WAIT_MS				500		/* ms */
+#define RMI_F34_IDLE_WAIT_MS				20		/* ms */
 
 #define RMI_DEVICE_PAGE_SELECT_REGISTER			0xff
 #define RMI_DEVICE_BUS_SELECT_REGISTER			0xfe
@@ -87,8 +89,9 @@ typedef enum {
 	RMI_DEVICE_WAIT_FOR_IDLE_FLAG_REFRESH_F34	= (1 << 0),
 } RmiDeviceWaitForIdleFlags;
 
-void		 	 fu_synaptics_rmi_device_set_iepmode	(FuSynapticsRmiDevice	*self,
+void			 fu_synaptics_rmi_device_set_iepmode	(FuSynapticsRmiDevice	*self,
 								 gboolean		iepmode);
+gboolean		 fu_synaptics_rmi_device_get_iepmode	(FuSynapticsRmiDevice	*self);
 gboolean		 fu_synaptics_rmi_device_set_page	(FuSynapticsRmiDevice	*self,
 								 guint8			 page,
 								 GError			**error);
@@ -130,6 +133,7 @@ void			 fu_synaptics_rmi_device_set_max_page	(FuSynapticsRmiDevice	*self,
 								 guint8			 max_page);
 guint8			 fu_synaptics_rmi_device_get_max_page	(FuSynapticsRmiDevice	*self);
 gboolean		 fu_synaptics_rmi_device_enter_iep_mode	(FuSynapticsRmiDevice	*self,
+								 FuSynapticsRmiDeviceFlags flags,
 								 GError			**error);
 gboolean		 fu_synaptics_rmi_device_write_bus_select (FuSynapticsRmiDevice *self,
 								 guint8			 bus,

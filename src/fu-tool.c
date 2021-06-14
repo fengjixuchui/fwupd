@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <jcat.h>
 
+#include "fu-cabinet.h"
+#include "fu-context-private.h"
 #include "fu-device-private.h"
 #include "fu-engine.h"
 #include "fu-history.h"
@@ -28,6 +30,7 @@
 #include "fu-security-attrs-private.h"
 #include "fu-smbios-private.h"
 #include "fu-util-common.h"
+#include "fu-hwids.h"
 #include "fu-debug.h"
 #include "fwupd-common-private.h"
 #include "fwupd-device-private.h"
@@ -63,6 +66,7 @@ struct FuUtilPrivate {
 	FwupdInstallFlags	 flags;
 	gboolean		 show_all;
 	gboolean		 disable_ssl_strict;
+	gint			 lock_fd;
 	/* only valid in update and downgrade */
 	FuUtilOperation		 current_operation;
 	FwupdDevice		*current_device;
@@ -167,10 +171,70 @@ fu_util_show_plugin_warnings (FuUtilPrivate *priv)
 }
 
 static gboolean
+fu_util_lock (FuUtilPrivate *priv, GError **error)
+{
+#ifdef HAVE_WRLCK
+	struct flock lockp = {
+		.l_type = F_WRLCK,
+		.l_whence = SEEK_SET,
+	};
+	g_autofree gchar *lockdir = NULL;
+	g_autofree gchar *lockfn = NULL;
+
+	/* open file */
+	lockdir = fu_common_get_path (FU_PATH_KIND_LOCKDIR);
+	lockfn = g_build_filename (lockdir, "fwupdtool", NULL);
+	if (!fu_common_mkdir_parent (lockfn, error))
+		return FALSE;
+	priv->lock_fd = g_open (lockfn, O_RDWR | O_CREAT, S_IRWXU);
+	if (priv->lock_fd < 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "failed to open %s",
+			     lockfn);
+		return FALSE;
+	}
+
+	/* write lock */
+#ifdef HAVE_OFD
+	if (fcntl (priv->lock_fd, F_OFD_SETLK, &lockp) < 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "another instance has locked %s",
+			     lockfn);
+		return FALSE;
+	}
+#else
+	if (fcntl (priv->lock_fd, F_SETLK, &lockp) < 0) {
+		g_set_error (error,
+			     FWUPD_ERROR,
+			     FWUPD_ERROR_NOT_SUPPORTED,
+			     "another instance has locked %s",
+			     lockfn);
+		return FALSE;
+	}
+#endif
+
+	/* success */
+	g_debug ("locked %s", lockfn);
+#endif
+	return TRUE;
+}
+
+static gboolean
 fu_util_start_engine (FuUtilPrivate *priv, FuEngineLoadFlags flags, GError **error)
 {
 #ifdef HAVE_SYSTEMD
 	g_autoptr(GError) error_local = NULL;
+#endif
+	if (!fu_util_lock (priv, error)) {
+		/* TRANSLATORS: another fwupdtool instance is already running */
+		g_prefix_error (error, "%s: ", _("Failed to lock"));
+		return FALSE;
+	}
+#ifdef HAVE_SYSTEMD
 	if (!fu_systemd_unit_stop (fu_util_get_systemd_unit (), &error_local))
 		g_debug ("Failed to stop daemon: %s", error_local->message);
 #endif
@@ -260,6 +324,8 @@ fu_util_private_free (FuUtilPrivate *priv)
 		g_object_unref (priv->progressbar);
 	if (priv->context != NULL)
 		g_option_context_free (priv->context);
+	if (priv->lock_fd != 0)
+		g_close (priv->lock_fd, NULL);
 	g_free (priv->current_message);
 	g_free (priv);
 }
@@ -842,6 +908,53 @@ fu_util_install_blob (FuUtilPrivate *priv, gchar **values, GError **error)
 }
 
 static gboolean
+fu_util_firmware_sign (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	g_autoptr(FuCabinet) cabinet = fu_cabinet_new ();
+	g_autoptr(GBytes) archive_blob_new = NULL;
+	g_autoptr(GBytes) archive_blob_old = NULL;
+	g_autoptr(GBytes) cert = NULL;
+	g_autoptr(GBytes) privkey = NULL;
+
+	/* invalid args */
+	if (g_strv_length (values) != 3) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_ARGS,
+				     "Invalid arguments, expected firmware.cab "
+				     "certificate.pem privatekey.pfx");
+		return FALSE;
+	}
+
+	/* load arguments */
+	archive_blob_old = fu_common_get_contents_bytes (values[0], error);
+	if (archive_blob_old == NULL)
+		return FALSE;
+	cert = fu_common_get_contents_bytes (values[1], error);
+	if (cert == NULL)
+		return FALSE;
+	privkey = fu_common_get_contents_bytes (values[2], error);
+	if (privkey == NULL)
+		return FALSE;
+
+	/* load, sign, export */
+	if (!fu_cabinet_parse (cabinet, archive_blob_old,
+			       FU_CABINET_PARSE_FLAG_NONE,
+			       error))
+		return FALSE;
+	if (!fu_cabinet_sign (cabinet, cert, privkey,
+			      FU_CABINET_SIGN_FLAG_NONE,
+			      error))
+		return FALSE;
+	archive_blob_new = fu_cabinet_export (cabinet,
+					      FU_CABINET_EXPORT_FLAG_NONE,
+					      error);
+	if (archive_blob_new == NULL)
+		return FALSE;
+	return fu_common_set_contents_bytes (values[0], archive_blob_new, error);
+}
+
+static gboolean
 fu_util_firmware_dump (FuUtilPrivate *priv, gchar **values, GError **error)
 {
 	g_autoptr(FuDevice) device = NULL;
@@ -1198,14 +1311,15 @@ fu_util_update_all (FuUtilPrivate *priv, GError **error)
 			continue;
 		}
 
+		rel = g_ptr_array_index (rels, 0);
 		if (!priv->no_safety_check) {
 			if (!fu_util_prompt_warning (dev,
+						     rel,
 						     fu_util_get_tree_title (priv),
 						     error))
 				return FALSE;
 		}
 
-		rel = g_ptr_array_index (rels, 0);
 		if (!fu_util_install_release (priv, rel, &error_local)) {
 			g_printerr ("%s\n", error_local->message);
 			continue;
@@ -1847,7 +1961,7 @@ fu_util_get_firmware_types (FuUtilPrivate *priv, gchar **values, GError **error)
 	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
 		return FALSE;
 
-	firmware_types = fu_engine_get_firmware_gtype_ids (priv->engine);
+	firmware_types = fu_context_get_firmware_gtype_ids (fu_engine_get_context (priv->engine));
 	for (guint i = 0; i < firmware_types->len; i++) {
 		const gchar *id = g_ptr_array_index (firmware_types, i);
 		g_print ("%s\n", id);
@@ -1866,7 +1980,7 @@ fu_util_prompt_for_firmware_type (FuUtilPrivate *priv, GError **error)
 {
 	g_autoptr(GPtrArray) firmware_types = NULL;
 	guint idx;
-	firmware_types = fu_engine_get_firmware_gtype_ids (priv->engine);
+	firmware_types = fu_context_get_firmware_gtype_ids (fu_engine_get_context (priv->engine));
 
 	/* TRANSLATORS: get interactive prompt */
 	g_print ("%s\n", _("Choose a firmware type:"));
@@ -1923,7 +2037,7 @@ fu_util_firmware_parse (FuUtilPrivate *priv, gchar **values, GError **error)
 		firmware_type = fu_util_prompt_for_firmware_type (priv, error);
 	if (firmware_type == NULL)
 		return FALSE;
-	gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type);
+	gtype = fu_context_get_firmware_gtype_by_id (fu_engine_get_context (priv->engine), firmware_type);
 	if (gtype == G_TYPE_INVALID) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -1935,6 +2049,62 @@ fu_util_firmware_parse (FuUtilPrivate *priv, gchar **values, GError **error)
 	if (!fu_firmware_parse (firmware, blob, priv->flags, error))
 		return FALSE;
 	str = fu_firmware_to_string (firmware);
+	g_print ("%s", str);
+	return TRUE;
+}
+
+static gboolean
+fu_util_firmware_export (FuUtilPrivate *priv, gchar **values, GError **error)
+{
+	FuFirmwareExportFlags flags = FU_FIRMWARE_EXPORT_FLAG_NONE;
+	GType gtype;
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autofree gchar *firmware_type = NULL;
+	g_autofree gchar *str = NULL;
+
+	/* check args */
+	if (g_strv_length (values) == 0 || g_strv_length (values) > 2) {
+		g_set_error_literal (error,
+				     FWUPD_ERROR,
+				     FWUPD_ERROR_INVALID_ARGS,
+				     "Invalid arguments: filename required");
+		return FALSE;
+	}
+
+	if (g_strv_length (values) == 2)
+		firmware_type = g_strdup (values[1]);
+
+	/* load file */
+	blob = fu_common_get_contents_bytes (values[0], error);
+	if (blob == NULL)
+		return FALSE;
+
+	/* load engine */
+	if (!fu_engine_load (priv->engine, FU_ENGINE_LOAD_FLAG_READONLY, error))
+		return FALSE;
+
+	/* find the GType to use */
+	if (firmware_type == NULL)
+		firmware_type = fu_util_prompt_for_firmware_type (priv, error);
+	if (firmware_type == NULL)
+		return FALSE;
+	gtype = fu_context_get_firmware_gtype_by_id (fu_engine_get_context (priv->engine), firmware_type);
+	if (gtype == G_TYPE_INVALID) {
+		g_set_error (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_FOUND,
+			     "GType %s not supported", firmware_type);
+		return FALSE;
+	}
+	firmware = g_object_new (gtype, NULL);
+	if (!fu_firmware_parse (firmware, blob, priv->flags, error))
+		return FALSE;
+	if (priv->show_all)
+		flags |= FU_FIRMWARE_EXPORT_FLAG_INCLUDE_DEBUG;
+	str = fu_firmware_export_to_xml (firmware, flags, error);
+	if (str == NULL)
+		return FALSE;
 	g_print ("%s", str);
 	return TRUE;
 }
@@ -1974,7 +2144,7 @@ fu_util_firmware_extract (FuUtilPrivate *priv, gchar **values, GError **error)
 		firmware_type = fu_util_prompt_for_firmware_type (priv, error);
 	if (firmware_type == NULL)
 		return FALSE;
-	gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type);
+	gtype = fu_context_get_firmware_gtype_by_id (fu_engine_get_context (priv->engine), firmware_type);
 	if (gtype == G_TYPE_INVALID) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -2082,7 +2252,7 @@ fu_util_firmware_build (FuUtilPrivate *priv, gchar **values, GError **error)
 	}
 	tmp = xb_node_get_attr (n, "id");
 	if (tmp != NULL) {
-		gtype = fu_engine_get_firmware_gtype_by_id (priv->engine, tmp);
+		gtype = fu_context_get_firmware_gtype_by_id (fu_engine_get_context (priv->engine), tmp);
 		if (gtype == G_TYPE_INVALID) {
 			g_set_error (error,
 				     G_IO_ERROR,
@@ -2116,6 +2286,7 @@ fu_util_firmware_build (FuUtilPrivate *priv, gchar **values, GError **error)
 static gboolean
 fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 {
+	FuContext *ctx = fu_engine_get_context (priv->engine);
 	GType gtype_dst;
 	GType gtype_src;
 	g_autofree gchar *firmware_type_dst = NULL;
@@ -2160,7 +2331,8 @@ fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 		firmware_type_dst = fu_util_prompt_for_firmware_type (priv, error);
 	if (firmware_type_dst == NULL)
 		return FALSE;
-	gtype_src = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type_src);
+	gtype_src = fu_context_get_firmware_gtype_by_id (fu_engine_get_context (priv->engine),
+							 firmware_type_src);
 	if (gtype_src == G_TYPE_INVALID) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -2171,7 +2343,7 @@ fu_util_firmware_convert (FuUtilPrivate *priv, gchar **values, GError **error)
 	firmware_src = g_object_new (gtype_src, NULL);
 	if (!fu_firmware_parse (firmware_src, blob_src, priv->flags, error))
 		return FALSE;
-	gtype_dst = fu_engine_get_firmware_gtype_by_id (priv->engine, firmware_type_dst);
+	gtype_dst = fu_context_get_firmware_gtype_by_id (ctx, firmware_type_dst);
 	if (gtype_dst == G_TYPE_INVALID) {
 		g_set_error (error,
 			     G_IO_ERROR,
@@ -2219,7 +2391,7 @@ fu_util_verify_update (FuUtilPrivate *priv, gchar **values, GError **error)
 
 	/* get device */
 	if (g_strv_length (values) == 1) {
-		dev = fu_util_get_device (priv, values[1], error);
+		dev = fu_util_get_device (priv, values[0], error);
 		if (dev == NULL)
 			return FALSE;
 	} else {
@@ -2767,7 +2939,7 @@ main (int argc, char *argv[])
 			_("Ignore requirement of external power source"), NULL },
 		{ "no-reboot-check", '\0', 0, G_OPTION_ARG_NONE, &priv->no_reboot_check,
 			/* TRANSLATORS: command line option */
-			_("Do not check for reboot after update"), NULL },
+			_("Do not check or prompt for reboot after update"), NULL },
 		{ "no-safety-check", '\0', 0, G_OPTION_ARG_NONE, &priv->no_safety_check,
 			/* TRANSLATORS: command line option */
 			_("Do not perform device safety checks"), NULL },
@@ -2983,6 +3155,13 @@ main (int argc, char *argv[])
 		     _("Update the stored metadata with current contents"),
 		     fu_util_verify_update);
 	fu_util_cmd_array_add (cmd_array,
+		     "firmware-sign",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME CERTIFICATE PRIVATE-KEY"),
+		     /* TRANSLATORS: command description */
+		     _("Sign a firmware with a new key"),
+		     fu_util_firmware_sign);
+	fu_util_cmd_array_add (cmd_array,
 		     "firmware-dump",
 		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
 		     _("FILENAME [DEVICE-ID|GUID]"),
@@ -3010,6 +3189,13 @@ main (int argc, char *argv[])
 		     /* TRANSLATORS: command description */
 		     _("Parse and show details about a firmware file"),
 		     fu_util_firmware_parse);
+	fu_util_cmd_array_add (cmd_array,
+		     "firmware-export",
+		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */
+		     _("FILENAME [FIRMWARE-TYPE]"),
+		     /* TRANSLATORS: command description */
+		     _("Export a firmware file structure to XML"),
+		     fu_util_firmware_export);
 	fu_util_cmd_array_add (cmd_array,
 		     "firmware-extract",
 		     /* TRANSLATORS: command argument: uppercase, spaces->dashes */

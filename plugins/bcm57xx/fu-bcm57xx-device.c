@@ -24,8 +24,7 @@
 #include <sys/socket.h>
 #endif
 
-#include "fu-chunk.h"
-#include "fu-common.h"
+#include <fwupdplugin.h>
 
 #include "fu-bcm57xx-common.h"
 #include "fu-bcm57xx-device.h"
@@ -73,8 +72,8 @@ fu_bcm57xx_device_probe (FuDevice *device, GError **error)
 	}
 
 	/* we need this even for non-recovery to reset APE */
-	fu_device_set_quirks (FU_DEVICE (self->recovery),
-			      fu_device_get_quirks (FU_DEVICE (self)));
+	fu_device_set_context (FU_DEVICE (self->recovery),
+			       fu_device_get_context (FU_DEVICE (self)));
 	fu_device_incorporate (FU_DEVICE (self->recovery), FU_DEVICE (self));
 	if (!fu_device_probe (FU_DEVICE (self->recovery), error))
 		return FALSE;

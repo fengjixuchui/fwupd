@@ -6,7 +6,8 @@
 
 #include "config.h"
 
-#include "fu-chunk.h"
+#include <fwupdplugin.h>
+
 #include "fu-hailuck-common.h"
 #include "fu-hailuck-bl-device.h"
 #include "fu-hailuck-kbd-firmware.h"
@@ -107,7 +108,7 @@ fu_hailuck_bl_device_dump_firmware (FuDevice *device, GError **error)
 	if (!fu_hailuck_bl_device_read_block_start (self, fwsz, error))
 		return NULL;
 
-	/* recieve data back */
+	/* receive data back */
 	fu_byte_array_set_size (fwbuf, fwsz);
 	chunks = fu_chunk_array_mutable_new (fwbuf->data, fwbuf->len, 0x0, 0x0, 2048);
 	for (guint i = 0; i < chunks->len; i++) {

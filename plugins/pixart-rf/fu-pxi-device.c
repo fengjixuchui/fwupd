@@ -12,14 +12,17 @@
 #include <linux/input.h>
 #endif
 
-#include "fu-common.h"
-#include "fu-chunk.h"
+#include <fwupdplugin.h>
 
 #include "fu-pxi-device.h"
 #include "fu-pxi-firmware.h"
 
 #define PXI_HID_DEV_OTA_INPUT_REPORT_ID		0x05
+#define PXI_HID_DEV_OTA_RETRANSMIT_REPORT_ID	0x06
 #define PXI_HID_DEV_OTA_FEATURE_REPORT_ID	0x07
+
+#define PXI_HID_DEV_OTA_REPORT_USAGE_PAGE	0xff02u
+#define PXI_HID_DEV_OTA_RETRANSMIT_USAGE_PAGE	0xff01u
 
 #define FU_PXI_DEVICE_CMD_FW_OTA_INIT		0x10u
 #define FU_PXI_DEVICE_CMD_FW_WRITE		0x17u
@@ -31,6 +34,7 @@
 #define FU_PXI_DEVICE_CMD_FW_OTA_RETRANSMIT	0x28u
 #define FU_PXI_DEVICE_CMD_FW_OTA_DISCONNECT	0x29u
 #define FU_PXI_DEVICE_CMD_FW_OTA_GET_MODEL	0x2bu
+#define ERR_COMMAND_SUCCESS			0x0
 
 #define FU_PXI_DEVICE_OBJECT_SIZE_MAX		4096	/* bytes */
 #define FU_PXI_DEVICE_OTA_BUF_SZ		512	/* bytes */
@@ -38,6 +42,8 @@
 #define FU_PXI_DEVICE_FW_INFO_RET_LEN		8	/* bytes */
 
 #define FU_PXI_DEVICE_NOTIFY_TIMEOUT_MS		5000
+
+#define FU_PXI_DEVICE_SET_REPORT_RETRIES	10
 
 /* OTA target selection */
 enum ota_process_setting {
@@ -66,6 +72,7 @@ enum ota_disconnect_reason {
 
 struct _FuPxiDevice {
 	FuUdevDevice	 parent_instance;
+	guint8		 retransmit_id;
 	guint8		 status;
 	guint8		 new_flow;
 	guint16		 offset;
@@ -74,7 +81,7 @@ struct _FuPxiDevice {
 	guint16		 mtu_size;
 	guint16		 prn_threshold;
 	guint8		 spec_check_result;
-	gchar 		*model_name;
+	gchar		*model_name;
 };
 
 G_DEFINE_TYPE (FuPxiDevice, fu_pxi_device, FU_TYPE_UDEV_DEVICE)
@@ -128,6 +135,7 @@ fu_pxi_device_to_string (FuDevice *device, guint idt, GString *str)
 	fu_common_string_append_kx (str, idt, "PacketReceiptNotificationThreshold", self->prn_threshold);
 	fu_common_string_append_kv (str, idt, "SpecCheckResult",
 				    fu_pxi_device_spec_check_result_to_string (self->spec_check_result));
+	fu_common_string_append_kx (str, idt, "RetransmitID", self->retransmit_id);
 }
 
 static FuFirmware *
@@ -167,6 +175,17 @@ fu_pxi_device_prepare_firmware (FuDevice *device,
 	return g_steal_pointer (&firmware);
 }
 
+#ifdef HAVE_HIDRAW_H
+static gboolean
+fu_pxi_device_set_feature_cb (FuDevice *device, gpointer user_data, GError **error)
+{
+	GByteArray *req = (GByteArray *) user_data;
+	return fu_udev_device_ioctl (FU_UDEV_DEVICE (device),
+				     HIDIOCSFEATURE(req->len), (guint8 *) req->data,
+				     NULL, error);
+}
+#endif
+
 static gboolean
 fu_pxi_device_set_feature (FuPxiDevice *self, GByteArray *req, GError **error)
 {
@@ -175,9 +194,9 @@ fu_pxi_device_set_feature (FuPxiDevice *self, GByteArray *req, GError **error)
 		fu_common_dump_raw (G_LOG_DOMAIN, "SetFeature",
 				    req->data, req->len);
 	}
-	return fu_udev_device_ioctl (FU_UDEV_DEVICE (self),
-				     HIDIOCSFEATURE(req->len), (guint8 *) req->data,
-				     NULL, error);
+	return fu_device_retry (FU_DEVICE (self),
+				fu_pxi_device_set_feature_cb,
+				FU_PXI_DEVICE_SET_REPORT_RETRIES, req, error);
 #else
 	g_set_error_literal (error,
 			     G_IO_ERROR,
@@ -225,6 +244,99 @@ fu_pxi_device_calculate_checksum (const guint8 *buf, gsize bufsz)
 	for (gsize idx = 0; idx < bufsz; idx++)
 		checksum += (guint16) buf[idx];
 	return checksum;
+}
+
+static gboolean
+fu_pxi_device_search_hid_usage_page (guint8 *report_descriptor, gint size,
+				     guint8 *usage_page, guint8 usage_page_sz)
+{
+	gint pos = 0;
+
+	if (g_getenv ("FWUPD_PIXART_RF_VERBOSE") != NULL) {
+		fu_common_dump_raw (G_LOG_DOMAIN, "target usage_page",
+				    usage_page, usage_page_sz);
+	}
+
+	while (pos < size) {
+		/* HID info define by HID specification */
+		guint8 item = report_descriptor[pos];
+		guint8 report_size = item & 0x03;
+		guint8 report_tag =  item & 0xF0;
+		guint8 usage_page_tmp[4] = {0x00};
+
+		report_size = (report_size == 3) ? 4 : report_size;
+
+		if (report_tag != 0) {
+			pos += report_size + 1;
+			continue;
+		}
+
+		memmove (usage_page, &report_descriptor[pos + 1], report_size);
+		if (memcmp (usage_page, usage_page_tmp, usage_page_sz) == 0) {
+			if (g_getenv ("FWUPD_PIXART_RF_VERBOSE") != NULL) {
+				g_debug ("hit item: %x  ",item);
+				fu_common_dump_raw (G_LOG_DOMAIN, "usage_page", usage_page, report_size);
+				g_debug ("hit pos %d",pos);
+			}
+			return TRUE; 	/* finished processing */
+		}
+		pos += report_size + 1;
+	}
+
+	return FALSE ; /* finished processing */
+}
+
+static gboolean
+fu_pxi_device_check_support_report_id (FuPxiDevice *self,
+				       GError **error)
+{
+#ifdef HAVE_HIDRAW_H
+	gint desc_size = 0;
+	g_autoptr(GByteArray) req = g_byte_array_new ();
+
+	struct hidraw_report_descriptor rpt_desc;
+
+	/* Get Report Descriptor Size */
+	if (!fu_udev_device_ioctl (FU_UDEV_DEVICE (self), HIDIOCGRDESCSIZE,
+				   (guint8*)&desc_size, NULL, error))
+		return FALSE;
+
+	rpt_desc.size = desc_size;
+	if (!fu_udev_device_ioctl (FU_UDEV_DEVICE (self), HIDIOCGRDESC,
+			           (guint8*)&rpt_desc,
+				   NULL, error))
+		return FALSE;
+	fu_common_dump_raw (G_LOG_DOMAIN, "HID descriptor",
+			    rpt_desc.value, rpt_desc.size);
+
+
+	/* check ota retransmit feature report usage page exist or not */
+	fu_byte_array_append_uint16 (req, PXI_HID_DEV_OTA_RETRANSMIT_USAGE_PAGE, G_LITTLE_ENDIAN);
+	if (!fu_pxi_device_search_hid_usage_page (rpt_desc.value, rpt_desc.size,
+						  req->data, req->len)) {
+		/* replace retransmit report id with feature report id, if retransmit report id not found */
+		self->retransmit_id = PXI_HID_DEV_OTA_FEATURE_REPORT_ID;
+	}
+	return TRUE;
+
+#else
+	g_set_error_literal (error,
+			     G_IO_ERROR,
+			     G_IO_ERROR_NOT_SUPPORTED,
+			     "<linux/hidraw.h> not available");
+	return FALSE
+#endif
+}
+
+static gboolean
+fu_pxi_device_fw_ota_check_retransmit (FuPxiDevice *self, GError **error)
+{
+	g_autoptr(GByteArray) req = g_byte_array_new ();
+
+	/* write fw ota retransmit command to reset the ota state */
+	fu_byte_array_append_uint8 (req, self->retransmit_id);
+	fu_byte_array_append_uint8 (req, FU_PXI_DEVICE_CMD_FW_OTA_RETRANSMIT);
+	return fu_pxi_device_set_feature (self, req, error);
 }
 
 static gboolean
@@ -286,6 +398,7 @@ fu_pxi_device_wait_notify (FuPxiDevice *self,
 {
 	g_autoptr(GTimer) timer = g_timer_new ();
 	guint8 res[FU_PXI_DEVICE_OTA_BUF_SZ] = { 0 };
+	guint8 cmd_status = 0x0;
 
 	/* skip the wrong report id ,and keep polling until result is correct */
 	while (g_timer_elapsed (timer, NULL) * 1000.f < FU_PXI_DEVICE_NOTIFY_TIMEOUT_MS) {
@@ -305,11 +418,29 @@ fu_pxi_device_wait_notify (FuPxiDevice *self,
 				     "Timed-out waiting for HID report");
 		return FALSE;
 	}
-
+	/* get the opcode if status is not null */
 	if (status != NULL) {
+		guint8 status_tmp = 0x0;
 		if (!fu_common_read_uint8_safe (res, sizeof(res), 0x1,
-						status, error))
+						&status_tmp, error))
 			return FALSE;
+		/* need check command result if command is fw upgrade */
+		if (status_tmp == FU_PXI_DEVICE_CMD_FW_UPGRADE) {
+			if (!fu_common_read_uint8_safe (res, sizeof(res), 0x2,
+							&cmd_status, error))
+				return FALSE;
+			if (cmd_status != ERR_COMMAND_SUCCESS) {
+				g_set_error (error,
+					     FWUPD_ERROR,
+					     FWUPD_ERROR_READ,
+					     "cmd status was 0x%02x",
+					     cmd_status);
+				return FALSE;
+			}
+		}
+
+		/* propagate */
+		*status = status_tmp;
 	}
 	if (checksum != NULL) {
 		if (!fu_common_read_uint16_safe (res, sizeof(res), 0x3,
@@ -555,8 +686,14 @@ fu_pxi_device_fw_upgrade (FuPxiDevice *self, FuFirmware *firmware, GError **erro
 		fu_common_dump_raw (G_LOG_DOMAIN, "fw upgrade", req->data, req->len);
 
 	/* wait fw upgrade command result */
-	if (!fu_pxi_device_wait_notify (self, 0x1, &opcode, NULL, error))
+	if (!fu_pxi_device_wait_notify (self, 0x1, &opcode, NULL, error)) {
+		g_prefix_error (error,
+				"FwUpgrade command fail, "
+				"fw-checksum: 0x%04x fw-size: %" G_GSIZE_FORMAT ": ",
+				checksum,
+				bufsz);
 		return FALSE;
+	}
 	if (opcode != FU_PXI_DEVICE_CMD_FW_UPGRADE) {
 		g_set_error (error,
 			     FWUPD_ERROR,
@@ -586,8 +723,14 @@ fu_pxi_device_write_firmware (FuDevice *device,
 	if (fw == NULL)
 		return FALSE;
 
-	/* send fw ota init command */
+
+	/* send fw ota retransmit command to reset status */
 	fu_device_set_status (device, FWUPD_STATUS_DEVICE_BUSY);
+	if (!fu_pxi_device_fw_ota_check_retransmit (self, error)) {
+		g_prefix_error (error, "failed to OTA check retransmit: ");
+		return FALSE;
+	}
+	/* send fw ota init command */
 	if (!fu_pxi_device_fw_ota_init (self, error))
 		return FALSE;
 	if (!fu_pxi_device_fw_ota_init_new (self, g_bytes_get_size (fw), error))
@@ -743,7 +886,7 @@ fu_pxi_device_setup_guid (FuPxiDevice *self, GError **error)
 		devid2 = g_strdup_printf ("HIDRAW\\VEN_%04X&DEV_%04X&MODEL_%s",
 					 (guint) hid_raw_info.vendor,
 					 (guint) hid_raw_info.product,
-					 dev_name->str);
+					 model_name->str);
 		fu_device_add_instance_id (FU_DEVICE (self), devid2);
 	}
 #endif
@@ -755,6 +898,13 @@ fu_pxi_device_setup (FuDevice *device, GError **error)
 {
 	FuPxiDevice *self = FU_PXI_DEVICE (device);
 
+	if (!fu_pxi_device_check_support_report_id (self, error)) {
+		g_prefix_error (error, "failed to check report id: ");
+	}
+	if (!fu_pxi_device_fw_ota_check_retransmit (self, error)) {
+		g_prefix_error (error, "failed to OTA check retransmit: ");
+		return FALSE;
+	}
 	if (!fu_pxi_device_fw_ota_init (self, error)) {
 		g_prefix_error (error, "failed to OTA init: ");
 		return FALSE;
@@ -771,6 +921,7 @@ fu_pxi_device_setup (FuDevice *device, GError **error)
 		g_prefix_error (error, "failed to setup GUID: ");
 		return FALSE;
 	}
+
 	return TRUE;
 }
 
@@ -781,6 +932,8 @@ fu_pxi_device_init (FuPxiDevice *self)
 	fu_device_set_version_format (FU_DEVICE (self), FWUPD_VERSION_FORMAT_TRIPLET);
 	fu_device_add_vendor_id (FU_DEVICE (self), "USB:0x093A");
 	fu_device_add_protocol (FU_DEVICE (self), "com.pixart.rf");
+	fu_device_retry_set_delay (FU_DEVICE (self), 50);
+	self->retransmit_id = PXI_HID_DEV_OTA_RETRANSMIT_REPORT_ID;
 }
 
 static void

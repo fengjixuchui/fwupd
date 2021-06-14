@@ -55,9 +55,11 @@ gboolean	 fu_util_is_interesting_device	(FwupdDevice	*dev);
 gchar		*fu_util_get_user_cache_path	(const gchar	*fn);
 gchar		*fu_util_get_versions		(void);
 
-void		 fu_util_warning_box		(const gchar	*str,
+void		 fu_util_warning_box		(const gchar	*title,
+						 const gchar	*body,
 						 guint		 width);
 gboolean	fu_util_prompt_warning		(FwupdDevice	*device,
+						 FwupdRelease	*release,
 						 const gchar	*machine,
 						 GError		**error);
 gboolean	fu_util_prompt_complete		(FwupdDeviceFlags flags,

@@ -8,9 +8,9 @@
 
 #include "config.h"
 
+#include <fwupdplugin.h>
 #include <string.h>
 
-#include "fu-common.h"
 #include "fu-synaptics-rmi-common.h"
 #include "fu-synaptics-rmi-firmware.h"
 
@@ -166,18 +166,23 @@ fu_synaptics_rmi_firmware_add_image (FuFirmware *firmware, const gchar *id,
 }
 
 static void
-fu_synaptics_rmi_firmware_to_string (FuFirmware *firmware, guint idt, GString *str)
+fu_synaptics_rmi_firmware_export (FuFirmware *firmware,
+				  FuFirmwareExportFlags flags,
+				  XbBuilderNode *bn)
 {
 	FuSynapticsRmiFirmware *self = FU_SYNAPTICS_RMI_FIRMWARE (firmware);
-	fu_common_string_append_kx (str, idt, "Kind", self->kind);
-	fu_common_string_append_kv (str, idt, "ProductId", self->product_id);
-	fu_common_string_append_kx (str, idt, "BootloaderVersion", self->bootloader_version);
-	fu_common_string_append_kx (str, idt, "IO", self->io);
-	fu_common_string_append_kx (str, idt, "Checksum", self->checksum);
-	fu_common_string_append_kx (str, idt, "BuildId", self->build_id);
-	fu_common_string_append_kx (str, idt, "PackageId", self->package_id);
-	fu_common_string_append_kx (str, idt, "ProductInfo", self->product_info);
-	fu_common_string_append_kx (str, idt, "SigSize", self->sig_size);
+	fu_xmlb_builder_insert_kx (bn, "kind", self->kind);
+	fu_xmlb_builder_insert_kv (bn, "product_id", self->product_id);
+	if (flags & FU_FIRMWARE_EXPORT_FLAG_INCLUDE_DEBUG) {
+		fu_xmlb_builder_insert_kx (bn, "bootloader_version",
+					   self->bootloader_version);
+		fu_xmlb_builder_insert_kx (bn, "io", self->io);
+		fu_xmlb_builder_insert_kx (bn, "checksum", self->checksum);
+		fu_xmlb_builder_insert_kx (bn, "build_id", self->build_id);
+		fu_xmlb_builder_insert_kx (bn, "package_id", self->package_id);
+		fu_xmlb_builder_insert_kx (bn, "product_info", self->product_info);
+		fu_xmlb_builder_insert_kx (bn, "sig_size", self->sig_size);
+	}
 }
 
 static gboolean
@@ -345,6 +350,7 @@ fu_synaptics_rmi_firmware_parse_v0x (FuFirmware *firmware, GBytes *fw, GError **
 	FuSynapticsRmiFirmware *self = FU_SYNAPTICS_RMI_FIRMWARE (firmware);
 	guint32 cfg_sz;
 	guint32 img_sz = 0;
+	guint32 sig_offset = 0;
 	gsize sz = 0;
 	const guint8 *data = g_bytes_get_data (fw, &sz);
 
@@ -358,9 +364,9 @@ fu_synaptics_rmi_firmware_parse_v0x (FuFirmware *firmware, GBytes *fw, GError **
 	if (img_sz > 0) {
 		/* payload, then signature appended */
 		if (self->sig_size > 0) {
-			img_sz -= self->sig_size;
+			sig_offset = img_sz - self->sig_size;
 			if (!fu_synaptics_rmi_firmware_add_image (firmware, "sig", fw,
-								  RMI_IMG_FW_OFFSET + img_sz,
+								  RMI_IMG_FW_OFFSET + sig_offset,
 								  self->sig_size,
 								  error))
 				return FALSE;
@@ -466,6 +472,7 @@ fu_synaptics_rmi_firmware_parse (FuFirmware *firmware,
 					 G_LITTLE_ENDIAN,
 					 error))
 		return FALSE;
+	fu_firmware_set_size (firmware, firmware_size);
 
 	/* parse partitions, but ignore lockdown */
 	switch (self->bootloader_version) {
@@ -693,7 +700,7 @@ fu_synaptics_rmi_firmware_class_init (FuSynapticsRmiFirmwareClass *klass)
 	FuFirmwareClass *klass_firmware = FU_FIRMWARE_CLASS (klass);
 	object_class->finalize = fu_synaptics_rmi_firmware_finalize;
 	klass_firmware->parse = fu_synaptics_rmi_firmware_parse;
-	klass_firmware->to_string = fu_synaptics_rmi_firmware_to_string;
+	klass_firmware->export = fu_synaptics_rmi_firmware_export;
 	klass_firmware->build = fu_synaptics_rmi_firmware_build;
 	klass_firmware->write = fu_synaptics_rmi_firmware_write;
 }

@@ -6,7 +6,8 @@
 
 #include "config.h"
 
-#include "fu-chunk.h"
+#include <fwupdplugin.h>
+
 #include "fu-superio-common.h"
 #include "fu-superio-it89-device.h"
 
@@ -467,7 +468,7 @@ fu_superio_it89_device_attach (FuDevice *device, GError **error)
 		return FALSE;
 
 	/* success */
-	fu_device_remove_flag (self, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
+	fu_device_remove_flag (device, FWUPD_DEVICE_FLAG_IS_BOOTLOADER);
 	return TRUE;
 }
 

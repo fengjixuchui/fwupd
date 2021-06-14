@@ -14,11 +14,9 @@
 #include "fu-common.h"
 
 /**
- * SECTION:fu-chunk
- * @short_description: A packet of chunked data
+ * FuChunk:
  *
- * An object that represents a packet of data.
- *
+ * A optionally mutable packet of chunked data with address, page and index.
  */
 
 struct _FuChunk {
@@ -56,7 +54,7 @@ fu_chunk_set_idx (FuChunk *self, guint32 idx)
  *
  * Gets the index of the chunk.
  *
- * Return value: index
+ * Returns: index
  *
  * Since: 1.5.6
  **/
@@ -89,7 +87,7 @@ fu_chunk_set_page (FuChunk *self, guint32 page)
  *
  * Gets the page of the chunk.
  *
- * Return value: page
+ * Returns: page
  *
  * Since: 1.5.6
  **/
@@ -122,7 +120,7 @@ fu_chunk_set_address (FuChunk *self, guint32 address)
  *
  * Gets the address of the chunk.
  *
- * Return value: address
+ * Returns: address
  *
  * Since: 1.5.6
  **/
@@ -139,7 +137,7 @@ fu_chunk_get_address (FuChunk *self)
  *
  * Gets the data of the chunk.
  *
- * Return value: bytes
+ * Returns: bytes
  *
  * Since: 1.5.6
  **/
@@ -161,7 +159,7 @@ fu_chunk_get_data (FuChunk *self)
  * fu_chunk_array_new() is also writable (i.e. not `const` or `mmap`) before
  * using this function.
  *
- * Return value: (transfer none): bytes
+ * Returns: (transfer none): bytes
  *
  * Since: 1.5.6
  **/
@@ -184,7 +182,7 @@ fu_chunk_get_data_out (FuChunk *self)
  *
  * Gets the data size of the chunk.
  *
- * Return value: size in bytes
+ * Returns: size in bytes
  *
  * Since: 1.5.6
  **/
@@ -198,9 +196,9 @@ fu_chunk_get_data_sz (FuChunk *self)
 /**
  * fu_chunk_set_bytes:
  * @self: a #FuChunk
- * @bytes: (nullable): a #GBytes, or %NULL
+ * @bytes: (nullable): data
  *
- * Sets the GBytes blob
+ * Sets the data to use for the chunk.
  *
  * Since: 1.5.6
  **/
@@ -228,9 +226,9 @@ fu_chunk_set_bytes (FuChunk *self, GBytes *bytes)
  * fu_chunk_get_bytes:
  * @self: a #FuChunk
  *
- * Gets the data as bytes of the chunk.
+ * Gets the data of the chunk.
  *
- * Return value: (transfer full): a #GBytes
+ * Returns: (transfer full): data
  *
  * Since: 1.5.6
  **/
@@ -253,7 +251,7 @@ fu_chunk_get_bytes (FuChunk *self)
  *
  * Creates a new packet of chunked data.
  *
- * Return value: (transfer full): a #FuChunk
+ * Returns: (transfer full): a #FuChunk
  *
  * Since: 1.1.2
  **/
@@ -275,11 +273,11 @@ fu_chunk_new (guint32 idx,
 
 /**
  * fu_chunk_bytes_new:
- * @bytes: (nullable): a #GBytes
+ * @bytes: (nullable): data
  *
  * Creates a new packet of data.
  *
- * Return value: (transfer full): a #FuChunk
+ * Returns: (transfer full): a #FuChunk
  *
  * Since: 1.5.6
  **/
@@ -292,19 +290,23 @@ fu_chunk_bytes_new (GBytes *bytes)
 }
 
 void
-fu_chunk_add_string (FuChunk *self, guint idt, GString *str)
+fu_chunk_export (FuChunk *self, FuFirmwareExportFlags flags, XbBuilderNode *bn)
 {
-	fu_common_string_append_kv (str, idt, G_OBJECT_TYPE_NAME (self), NULL);
-	fu_common_string_append_kx (str, idt + 1, "Index", self->idx);
-	fu_common_string_append_kx (str, idt + 1, "Page", self->page);
-	fu_common_string_append_kx (str, idt + 1, "Address", self->address);
+	fu_xmlb_builder_insert_kx (bn, "idx", self->idx);
+	fu_xmlb_builder_insert_kx (bn, "page", self->page);
+	fu_xmlb_builder_insert_kx (bn, "addr", self->address);
 	if (self->data != NULL) {
 		g_autofree gchar *datastr = NULL;
-		datastr = fu_common_strsafe ((const gchar *) self->data, MIN (self->data_sz, 16));
-		if (datastr != NULL)
-			fu_common_string_append_kv (str, idt + 1, "Data", datastr);
+		g_autofree gchar *dataszstr = g_strdup_printf ("0x%x", (guint) self->data_sz);
+		if (flags & FU_FIRMWARE_EXPORT_FLAG_ASCII_DATA) {
+			datastr = fu_common_strsafe ((const gchar *) self->data, MIN (self->data_sz, 16));
+		} else {
+			datastr = g_base64_encode (self->data, self->data_sz);
+		}
+		xb_builder_node_insert_text (bn, "data", datastr,
+					     "size", dataszstr,
+					     NULL);
 	}
-	fu_common_string_append_kx (str, idt + 1, "DataSz", self->data_sz);
 }
 
 /**
@@ -313,40 +315,50 @@ fu_chunk_add_string (FuChunk *self, guint idt, GString *str)
  *
  * Converts the chunked packet to a string representation.
  *
- * Return value: (transfer full): A string
+ * Returns: (transfer full): a string
  *
  * Since: 1.1.2
  **/
 gchar *
 fu_chunk_to_string (FuChunk *self)
 {
-	GString *str = g_string_new (NULL);
-	fu_chunk_add_string (self, 0, str);
-	return g_string_free (str, FALSE);
+	g_autoptr(XbBuilderNode) bn = xb_builder_node_new ("chunk");
+	fu_chunk_export (self, FU_FIRMWARE_EXPORT_FLAG_ASCII_DATA, bn);
+	return xb_builder_node_export (bn,
+				       XB_NODE_EXPORT_FLAG_FORMAT_MULTILINE |
+#if LIBXMLB_CHECK_VERSION(0,2,2)
+				       XB_NODE_EXPORT_FLAG_COLLAPSE_EMPTY |
+#endif
+				       XB_NODE_EXPORT_FLAG_FORMAT_INDENT,
+				       NULL);
 }
 
 /**
  * fu_chunk_array_to_string:
- * @chunks: (element-type FuChunk): array of packets
+ * @chunks: (element-type FuChunk): array of chunks
  *
  * Converts all the chunked packets in an array to a string representation.
  *
- * Return value: (transfer full): A string
+ * Returns: (transfer full): a string
  *
  * Since: 1.0.1
  **/
 gchar *
 fu_chunk_array_to_string (GPtrArray *chunks)
 {
-	GString *str = g_string_new (NULL);
+	g_autoptr(XbBuilderNode) bn = xb_builder_node_new ("chunks");
 	for (guint i = 0; i < chunks->len; i++) {
 		FuChunk *chk = g_ptr_array_index (chunks, i);
-		g_autofree gchar *tmp = fu_chunk_to_string (chk);
-		g_string_append_printf (str, "%s\n", tmp);
+		g_autoptr(XbBuilderNode) bc = xb_builder_node_insert (bn, "chunk", NULL);
+		fu_chunk_export (chk, FU_FIRMWARE_EXPORT_FLAG_ASCII_DATA, bc);
 	}
-	if (str->len > 0)
-		g_string_truncate (str, str->len - 1);
-	return g_string_free (str, FALSE);
+	return xb_builder_node_export (bn,
+				       XB_NODE_EXPORT_FLAG_FORMAT_MULTILINE |
+#if LIBXMLB_CHECK_VERSION(0,2,2)
+				       XB_NODE_EXPORT_FLAG_COLLAPSE_EMPTY |
+#endif
+				       XB_NODE_EXPORT_FLAG_FORMAT_INDENT,
+				       NULL);
 }
 
 /**
@@ -360,7 +372,7 @@ fu_chunk_array_to_string (GPtrArray *chunks)
  * Chunks a mutable blob of memory into packets, ensuring each packet does not
  * cross a package boundary and is less that a specific transfer size.
  *
- * Return value: (transfer container) (element-type FuChunk): array of packets
+ * Returns: (transfer container) (element-type FuChunk): array of packets
  *
  * Since: 1.5.6
  **/
@@ -388,7 +400,7 @@ fu_chunk_array_mutable_new (guint8 *data,
 
 /**
  * fu_chunk_array_new:
- * @data: a linear blob of memory, or %NULL
+ * @data: (nullable): an optional linear blob of memory
  * @data_sz: size of @data_sz
  * @addr_start: the hardware address offset, or 0
  * @page_sz: the hardware page size, or 0
@@ -397,7 +409,7 @@ fu_chunk_array_mutable_new (guint8 *data,
  * Chunks a linear blob of memory into packets, ensuring each packet does not
  * cross a package boundary and is less that a specific transfer size.
  *
- * Return value: (transfer container) (element-type FuChunk): array of packets
+ * Returns: (transfer container) (element-type FuChunk): array of packets
  *
  * Since: 1.1.2
  **/
@@ -472,7 +484,7 @@ fu_chunk_array_new (const guint8 *data,
 
 /**
  * fu_chunk_array_new_from_bytes:
- * @blob: a #GBytes
+ * @blob: data
  * @addr_start: the hardware address offset, or 0
  * @page_sz: the hardware page size, or 0
  * @packet_sz: the transfer size, or 0
@@ -480,7 +492,7 @@ fu_chunk_array_new (const guint8 *data,
  * Chunks a linear blob of memory into packets, ensuring each packet does not
  * cross a package boundary and is less that a specific transfer size.
  *
- * Return value: (transfer container) (element-type FuChunk): array of packets
+ * Returns: (transfer container) (element-type FuChunk): array of packets
  *
  * Since: 1.1.2
  **/

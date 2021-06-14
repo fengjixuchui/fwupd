@@ -2,30 +2,6 @@
 set -e
 set -x
 
-# check for g_return_val_if_fail sanity
-if ! ./contrib/ci/check-null-false-returns.py; then
-    exit 1
-fi
-
-# these are deprecated in favor of INTERNAL flags
-deprecated="FWUPD_DEVICE_FLAG_NO_AUTO_INSTANCE_IDS
-            FWUPD_DEVICE_FLAG_ONLY_SUPPORTED
-            FWUPD_DEVICE_FLAG_MD_SET_NAME
-            FWUPD_DEVICE_FLAG_MD_SET_VERFMT
-            FWUPD_DEVICE_FLAG_NO_GUID_MATCHING
-            FWUPD_DEVICE_FLAG_MD_SET_ICON"
-for val in $deprecated; do
-    if grep -- $val plugins/*/*.c ; then
-        exit 1
-    fi
-done
-
-# check shell scripts
-dnf install -y ShellCheck
-if ! find . -name '*.sh' | xargs shellcheck --severity=error -e SC2068; then
-    exit 1
-fi
-
 #get any missing deps from the container
 ./contrib/ci/generate_dependencies.py | xargs dnf install -y
 
@@ -39,7 +15,7 @@ if [ "$QUBES" = "true" ]; then
 fi
 
 meson .. \
-    -Dgtkdoc=true \
+    -Ddocs=none \
     -Dman=true \
     -Dtests=true \
     -Dgusb:tests=false \
