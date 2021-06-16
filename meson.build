@@ -1,5 +1,5 @@
 project('fwupd', 'c',
-  version : '1.6.1',
+  version : '1.6.2',
   license : 'LGPL-2.1+',
   meson_version : '>=0.47.0',
   default_options : ['warning_level=2', 'c_std=c99'],
@@ -252,7 +252,11 @@ libm = cc.find_library('m', required: false)
 libgcab = dependency('libgcab-1.0', version : '>= 1.0', fallback : ['gcab', 'gcab_dep'])
 gcab = find_program('gcab', required : get_option('tests'))
 bashcomp = dependency('bash-completion', required: false)
-python3 = find_program('python3.8', 'python3', 'python3.9')
+if host_machine.system() != 'freebsd'
+  python3 = find_program('python3')
+else
+  python3 = find_program('python3.8', 'python3', 'python3.9')
+endif
 
 if get_option('gnutls')
   gnutls = dependency('gnutls', version : '>= 3.6.0')
@@ -281,7 +285,7 @@ if get_option('default_library') != 'static'
     platform_deps += cc.find_library('shlwapi')
   endif
   if host_machine.system() == 'freebsd'
-    platform_deps += cc.find_library('efivar')
+    platform_deps += dependency('efivar')
   endif
 endif
 
@@ -364,6 +368,12 @@ if cc.has_header_symbol('fcntl.h', 'F_OFD_SETLK')
 endif
 if cc.has_function('pwrite', args : '-D_XOPEN_SOURCE')
   conf.set('HAVE_PWRITE', '1')
+endif
+
+if host_machine.system() == 'freebsd'
+  if cc.has_type('struct efi_esrt_entry_v1', prefix: '#include <sys/types.h>\n#include <sys/efiio.h>')
+    conf.set('HAVE_FREEBSD_ESRT', '1')
+  endif
 endif
 
 if build_standalone and get_option('plugin_tpm')
@@ -547,6 +557,9 @@ elif get_option('docs') == 'docgen'
     fallback: ['gi-docgen', 'dummy_dep'],
   )
   gidocgen = find_program('gi-docgen')
+  if not get_option('introspection')
+    error('introspection is needed for docgen')
+  endif
 endif
 
 subdir('libfwupd')
@@ -575,18 +588,4 @@ if makensis.found()
       makensis,
       join_paths(meson.source_root(), 'contrib', 'setup-win32.nsi'),
   ])
-endif
-
-codespell = find_program('codespell', required : false)
-if codespell.found()
-run_target('codespell',
-  command: [
-    codespell,
-    meson.source_root(),
-    '--write-changes',
-    '--builtin', 'clear,informal,en-GB_to_en-US',
-    '--skip', '*.po,*.csv,*.svg,*.p7c,subprojects,.git,pcrs,build*,.ossfuzz',
-    '--ignore-words-list', 'conexant,Conexant,gir,GIR,hsi,HSI,cancelled,Cancelled,te',
-  ]
-)
 endif

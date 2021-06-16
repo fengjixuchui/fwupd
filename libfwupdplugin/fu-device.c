@@ -206,6 +206,8 @@ fu_device_internal_flag_to_string (FuDeviceInternalFlags flag)
 		return "replug-match-guid";
 	if (flag == FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION)
 		return "inherit-activation";
+	if (flag == FU_DEVICE_INTERNAL_FLAG_IS_OPEN)
+		return "is-open";
 	return NULL;
 }
 
@@ -238,8 +240,12 @@ fu_device_internal_flag_from_string (const gchar *flag)
 		return FU_DEVICE_INTERNAL_FLAG_ENSURE_SEMVER;
 	if (g_strcmp0 (flag, "retry-open") == 0)
 		return FU_DEVICE_INTERNAL_FLAG_RETRY_OPEN;
-	if (g_strcmp0 (flag, "inherit-activation"))
+	if (g_strcmp0 (flag, "replug-match-guid") == 0)
+		return FU_DEVICE_INTERNAL_FLAG_REPLUG_MATCH_GUID;
+	if (g_strcmp0 (flag, "inherit-activation") == 0)
 		return FU_DEVICE_INTERNAL_FLAG_INHERIT_ACTIVATION;
+	if (g_strcmp0 (flag, "is-open") == 0)
+		return FU_DEVICE_INTERNAL_FLAG_IS_OPEN;
 	return FU_DEVICE_INTERNAL_FLAG_UNKNOWN;
 }
 
@@ -976,7 +982,7 @@ fu_device_add_child (FuDevice *self, FuDevice *child)
 	/* add if the child does not already exist */
 	fwupd_device_add_child (FWUPD_DEVICE (self), FWUPD_DEVICE (child));
 
-	/* ensure the parent has the MAX() of the childrens removal delay  */
+	/* ensure the parent has the MAX() of the children's removal delay  */
 	children = fu_device_get_children (self);
 	for (guint i = 0; i < children->len; i++) {
 		FuDevice *child_tmp = g_ptr_array_index (children, i);
@@ -1276,6 +1282,13 @@ fu_device_set_quirk_kv (FuDevice *self,
 	}
 	if (g_strcmp0 (key, FU_QUIRKS_VERSION_FORMAT) == 0) {
 		fu_device_set_version_format (self, fwupd_version_format_from_string (value));
+		return TRUE;
+	}
+	if (g_strcmp0 (key, FU_QUIRKS_INHIBIT) == 0) {
+		if (value != NULL)
+			fu_device_inhibit (self, "quirk", value);
+		else
+			fu_device_uninhibit (self, "quirk");
 		return TRUE;
 	}
 	if (g_strcmp0 (key, FU_QUIRKS_GTYPE) == 0) {
@@ -3579,6 +3592,10 @@ fu_device_setup (FuDevice *self, GError **error)
 
 	g_return_val_if_fail (FU_IS_DEVICE (self), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
+
+	/* should have already been called */
+	if (!fu_device_probe (self, error))
+		return FALSE;
 
 	/* already done */
 	if (priv->done_setup)
